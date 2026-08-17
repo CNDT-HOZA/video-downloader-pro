@@ -62,7 +62,7 @@ async function startServer() {
   }
 
   try {
-    const serverProcess = spawn('node', ['index.js'], {
+    const serverProcess = spawn(process.execPath, ['index.js'], {
       cwd: SERVER_DIR,
       detached: true,
       stdio: 'ignore',
