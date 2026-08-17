@@ -11,5 +11,19 @@
     "express": "^4.21.0",
     "cors": "^2.8.5",
     "uuid": "^10.0.0"
+  },
+  "bin": "cli.js",
+  "pkg": {
+    "scripts": [
+      "index.js",
+      "cli.js",
+      "setup-registry.js",
+      "doctor.js",
+      "lib/**/*.js",
+      "../native-host/host.js"
+    ],
+    "targets": [
+      "node18-win-x64"
+    ]
   }
 }

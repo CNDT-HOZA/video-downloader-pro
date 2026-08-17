@@ -8,6 +8,8 @@ const startingState = document.getElementById('startingState');
 const mainContent = document.getElementById('mainContent');
 const copyCmdBtn = document.getElementById('copyCmdBtn');
 const retryBtn = document.getElementById('retryBtn');
+const offlineDetail = document.getElementById('offlineDetail');
+const offlineCmd = document.getElementById('offlineCmd');
 
 const urlInput = document.getElementById('urlInput');
 const pasteBtn = document.getElementById('pasteBtn');
@@ -65,7 +67,34 @@ function setServerState(state) {
     case 'offline':
       statusLabel.textContent = 'Offline';
       offlineState.classList.remove('hidden');
+      describeOfflineReason();
       break;
+  }
+}
+
+// Giải thích lý do offline dựa trên phản hồi cuối cùng của native host
+async function describeOfflineReason() {
+  const state = await chrome.storage.local.get(['serverStatus', 'serverErrorLog']);
+
+  switch (state.serverStatus) {
+    case 'host_missing':
+      offlineDetail.textContent =
+        'Trình duyệt chưa tìm thấy Native Host. Hãy chạy setup.bat trong thư mục cài đặt, rồi mở lại trình duyệt.';
+      offlineCmd.textContent = 'setup.bat';
+      break;
+    case 'start_failed':
+      offlineDetail.textContent =
+        'Native host chạy được nhưng server không lên. Mở file server\\server.log để xem lỗi.';
+      offlineCmd.textContent = 'START_SERVER.bat';
+      break;
+    default:
+      offlineDetail.textContent =
+        'Chưa kết nối được server. Bấm "Thử lại", hoặc khởi động thủ công bằng:';
+      offlineCmd.textContent = 'START_SERVER.bat';
+  }
+
+  if (state.serverErrorLog) {
+    console.warn('[Native host]', state.serverErrorLog);
   }
 }
 
@@ -356,7 +385,7 @@ pasteBtn.onclick = async () => {
 };
 
 copyCmdBtn.onclick = () => {
-  navigator.clipboard.writeText('cd server && npm start');
+  navigator.clipboard.writeText(offlineCmd.textContent);
   copyCmdBtn.textContent = 'Đã copy!';
   setTimeout(() => (copyCmdBtn.textContent = 'Copy'), 2000);
 };

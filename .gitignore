@@ -1,13 +1,21 @@
 node_modules/
+
+# Binaries lon — KHONG commit, phai kem trong file zip khi chuyen may.
+# Xem PHAN-PHOI.md de biet danh sach file bat buoc.
 server/bin/
+server/server.exe
+
+# File sinh ra luc chay
+server/com.video_downloader.server.json
+server/settings.json
+server/formats.json
+server/info.json
 server/_pick_result.txt
 server/_pick_folder.hta
 server/_pick_folder.ps1
 server/_pick_folder.vbs
 server/_test_pick2.ps1
-server/settings.json
-server/formats.json
-server/info.json
+native-host/temp_setup.reg
 output/
 Start Server.bat
 *.log

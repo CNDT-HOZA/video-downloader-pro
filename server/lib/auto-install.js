@@ -6,8 +6,12 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const { execSync } = require('child_process');
+const { resolveAllTools, isToolResolved, getBinDir } = require('./resolve-tools');
 
-const BIN_DIR = path.join(__dirname, '..', 'bin');
+// Không dùng __dirname: khi đóng gói bằng pkg, __dirname trỏ vào snapshot ảo
+// (C:\snapshot\...) chỉ đọc, mkdir/ghi file sẽ ném lỗi và tool tải về sẽ nằm
+// ở nơi resolve-tools không bao giờ tìm tới.
+const BIN_DIR = getBinDir();
 
 const TOOLS = {
   'yt-dlp': {
@@ -37,7 +41,7 @@ function download(url, dest, label) {
         }
         if (res.statusCode !== 200) {
           file.close();
-          fs.unlinkSync(dest);
+          try { fs.unlinkSync(dest); } catch (ex) {}
           return reject(new Error(`HTTP ${res.statusCode}`));
         }
         const total = parseInt(res.headers['content-length'] || '0');
@@ -69,8 +73,9 @@ function download(url, dest, label) {
 async function installYtDlp() {
   const dest = path.join(BIN_DIR, 'yt-dlp.exe');
   if (fs.existsSync(dest)) return true;
-  
+
   try {
+    ensureBinDir();
     await download(TOOLS['yt-dlp'].url, dest, 'yt-dlp.exe');
     return true;
   } catch (e) {
@@ -83,14 +88,15 @@ async function installFFmpeg() {
   const ffmpegPath = path.join(BIN_DIR, 'ffmpeg.exe');
   const ffprobePath = path.join(BIN_DIR, 'ffprobe.exe');
   if (fs.existsSync(ffmpegPath) && fs.existsSync(ffprobePath)) return true;
-  
+
   const zipPath = path.join(BIN_DIR, 'ffmpeg.zip');
   try {
+    ensureBinDir();
     await download(TOOLS.ffmpeg.zipUrl, zipPath, 'FFmpeg');
-    
+
     console.log('[AutoInstall] Đang giải nén FFmpeg...');
-    execSync(`powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${BIN_DIR}' -Force"`, { stdio: 'pipe', windowsHide: true });
-    
+    execSync(`powershell -NoProfile -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${BIN_DIR}' -Force"`, { stdio: 'pipe', windowsHide: true });
+
     const extractedBin = path.join(BIN_DIR, TOOLS.ffmpeg.extractDir, 'bin');
     for (const file of TOOLS.ffmpeg.extractFiles) {
       const src = path.join(extractedBin, file);
@@ -99,13 +105,13 @@ async function installFFmpeg() {
         fs.copyFileSync(src, dst);
       }
     }
-    
+
     // Dọn dẹp
     try {
       fs.rmSync(path.join(BIN_DIR, TOOLS.ffmpeg.extractDir), { recursive: true });
       fs.unlinkSync(zipPath);
     } catch(e) {}
-    
+
     console.log('[AutoInstall] ✅ FFmpeg giải nén xong');
     return true;
   } catch (e) {
@@ -115,52 +121,52 @@ async function installFFmpeg() {
   }
 }
 
-async function ensureAllTools() {
+function ensureBinDir() {
   if (!fs.existsSync(BIN_DIR)) {
     fs.mkdirSync(BIN_DIR, { recursive: true });
   }
-  
-  const { getToolPath } = require('./resolve-tools');
+}
+
+/**
+ * Đảm bảo yt-dlp / ffmpeg / ffprobe sẵn sàng.
+ * KHÔNG BAO GIỜ ném lỗi — nếu thư mục không ghi được hoặc mạng hỏng thì chỉ
+ * trả về false, để server vẫn khởi động và báo lỗi rõ ràng cho người dùng.
+ */
+async function ensureAllTools() {
+  console.log(`[AutoInstall] Thư mục công cụ: ${BIN_DIR}`);
+
+  try {
+    ensureBinDir();
+  } catch (e) {
+    console.error(`[AutoInstall] ❌ Không tạo được thư mục ${BIN_DIR}: ${e.message}`);
+  }
+
+  // Resolve trước để biết tool nào đã có (bin/ hoặc PATH hệ thống)
+  resolveAllTools();
+
   const missing = [];
-  
-  if (!getToolPath('yt-dlp') || getToolPath('yt-dlp') === 'yt-dlp') {
-    missing.push('yt-dlp');
-  }
-  if (!getToolPath('ffmpeg') || getToolPath('ffmpeg') === 'ffmpeg') {
-    missing.push('ffmpeg');
-  }
-  
-  // Kiểm tra thêm trong bin/
-  if (!fs.existsSync(path.join(BIN_DIR, 'yt-dlp.exe'))) {
-    if (!missing.includes('yt-dlp')) {
-      // Có trong PATH nhưng chưa có trong bin/ — OK, dùng PATH
-    }
-  }
-  
+  if (!isToolResolved('yt-dlp')) missing.push('yt-dlp');
+  if (!isToolResolved('ffmpeg') || !isToolResolved('ffprobe')) missing.push('ffmpeg');
+
   if (missing.length === 0) {
     console.log('[AutoInstall] Tất cả công cụ đã sẵn sàng.');
     return true;
   }
-  
+
   console.log(`[AutoInstall] Thiếu: ${missing.join(', ')}. Đang tự động tải...`);
-  
+
   let allOk = true;
   if (missing.includes('yt-dlp')) {
-    const ok = await installYtDlp();
-    if (!ok) allOk = false;
+    if (!(await installYtDlp())) allOk = false;
   }
   if (missing.includes('ffmpeg')) {
-    const ok = await installFFmpeg();
-    if (!ok) allOk = false;
+    if (!(await installFFmpeg())) allOk = false;
   }
-  
-  // Re-resolve sau khi cài
-  if (allOk) {
-    const { resolveAllTools } = require('./resolve-tools');
-    resolveAllTools();
-  }
-  
+
+  // Re-resolve để nhận tool vừa tải (kể cả khi chỉ tải được một phần)
+  resolveAllTools();
+
   return allOk;
 }
 
-module.exports = { ensureAllTools, installYtDlp, installFFmpeg };
+module.exports = { ensureAllTools, installYtDlp, installFFmpeg, BIN_DIR };

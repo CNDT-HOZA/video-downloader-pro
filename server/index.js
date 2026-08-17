@@ -3,7 +3,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const { exec, execSync } = require('child_process');
-const { resolveAllTools } = require('./lib/resolve-tools');
+const { resolveAllTools, isToolResolved, getAppDir } = require('./lib/resolve-tools');
 const TaskManager = require('./lib/task-manager');
 const { downloadVideo, getFormats } = require('./lib/downloader');
 const { convertToMp4 } = require('./lib/converter');
@@ -20,7 +20,9 @@ const app = express();
 const PORT = 3847;
 
 let OUTPUT_DIR = path.join(os.homedir(), 'Downloads');
-const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+
+const physicalDir = getAppDir();
+const SETTINGS_FILE = path.join(physicalDir, 'settings.json');
 
 try {
   if (fs.existsSync(SETTINGS_FILE)) {
@@ -39,7 +41,7 @@ try {
   }
 } catch (err) {
   console.error(`[Warning] Could not create ${OUTPUT_DIR}, using local output folder.`);
-  OUTPUT_DIR = path.resolve(__dirname, '..', 'output');
+  OUTPUT_DIR = process.pkg ? path.join(physicalDir, 'output') : path.resolve(__dirname, '..', 'output');
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 }
 
@@ -158,12 +160,20 @@ taskManager.on('task:start', async (taskId) => {
 // Endpoints
 
 let isServerReady = false;
+let startupError = null;
 
 app.get('/api/health', (req, res) => {
   if (!isServerReady) {
     return res.json({ status: 'installing', version: '1.0.0' });
   }
-  res.json({ status: 'ok', version: '1.0.0' });
+
+  const missing = ['yt-dlp', 'ffmpeg', 'ffprobe'].filter((t) => !isToolResolved(t));
+  res.json({
+    status: 'ok',
+    version: '1.0.0',
+    missingTools: missing,
+    startupError: startupError || undefined,
+  });
 });
 
 app.all('/api/formats', async (req, res) => {
@@ -411,12 +421,15 @@ app.post('/api/open-folder', (req, res) => {
 });
 
 app.get('/api/pick-folder', (req, res) => {
-  const resultFile = path.join(__dirname, '_pick_result.txt');
-  const htaPath = path.join(__dirname, '_pick_folder.hta');
-  
+  // Không dùng __dirname: dưới pkg nó là snapshot ảo chỉ đọc.
+  // tmpdir luôn ghi được kể cả khi ứng dụng nằm trong Program Files.
+  const stamp = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const resultFile = path.join(os.tmpdir(), `vd_pick_result_${stamp}.txt`);
+  const htaPath = path.join(os.tmpdir(), `vd_pick_folder_${stamp}.hta`);
+
   // Xóa result cũ
   try { fs.unlinkSync(resultFile); } catch {}
-  
+
   const htaContent = `<html>
 <head><title>Chon thu muc</title>
 <HTA:APPLICATION ID="app" SHOWINTASKBAR="no" BORDER="none" INNERBORDER="no" CAPTION="no" WINDOWSTATE="minimize"/>
@@ -438,22 +451,40 @@ Sub Window_OnLoad
 End Sub
 </script></head><body></body></html>`;
 
-  fs.writeFileSync(htaPath, htaContent, 'utf-8');
-  
-  const mshta = path.join('C:\\Windows\\System32', 'mshta.exe');
-  const child = exec(`"${mshta}" "${htaPath}"`, { timeout: 120000 });
-  
-  child.on('close', () => {
+  try {
+    fs.writeFileSync(htaPath, htaContent, 'utf-8');
+  } catch (e) {
+    return res.status(500).json({ error: `Không tạo được hộp thoại chọn thư mục: ${e.message}` });
+  }
+
+  const mshta = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'mshta.exe');
+  const child = exec(`"${mshta}" "${htaPath}"`, { timeout: 120000, windowsHide: true });
+
+  let answered = false;
+  const finish = (payload) => {
+    if (answered) return;
+    answered = true;
     try { fs.unlinkSync(htaPath); } catch {}
+    try { fs.unlinkSync(resultFile); } catch {}
+    res.json(payload);
+  };
+
+  child.on('error', (err) => {
+    if (answered) return;
+    answered = true;
+    try { fs.unlinkSync(htaPath); } catch {}
+    res.status(500).json({ error: `Không chạy được mshta.exe: ${err.message}` });
+  });
+
+  child.on('close', () => {
     try {
       const selected = fs.readFileSync(resultFile, 'utf-8').trim();
-      fs.unlinkSync(resultFile);
       if (!selected || selected === '__CANCELLED__') {
-        return res.json({ cancelled: true });
+        return finish({ cancelled: true });
       }
-      res.json({ path: selected });
+      finish({ path: selected });
     } catch {
-      res.json({ cancelled: true });
+      finish({ cancelled: true });
     }
   });
 });
@@ -488,18 +519,46 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
-app.listen(PORT, async () => {
+const server = app.listen(PORT, async () => {
   console.log(`\n=============================================`);
   console.log(`Video Downloader Server starting...`);
   console.log(`Listening on http://localhost:${PORT}`);
+  console.log(`App Directory:    ${physicalDir}`);
   console.log(`Output Directory: ${OUTPUT_DIR}`);
   console.log(`=============================================\n`);
 
-  // Tự động tải tool thiếu
-  await ensureAllTools();
-  // Re-resolve để nhận tool mới
-  const { resolveAllTools } = require('./lib/resolve-tools');
-  resolveAllTools();
-  
+  // Tự động tải tool thiếu.
+  // Bất kỳ lỗi nào ở đây cũng KHÔNG được chặn isServerReady — nếu không
+  // /api/health sẽ trả 'installing' vĩnh viễn và extension kẹt ở màn hình chờ.
+  try {
+    await ensureAllTools();
+  } catch (err) {
+    startupError = err.message;
+    console.error('[Startup] ensureAllTools thất bại:', err.message);
+  }
+
+  try {
+    resolveAllTools();
+  } catch (err) {
+    startupError = startupError || err.message;
+    console.error('[Startup] resolveAllTools thất bại:', err.message);
+  }
+
+  const missing = ['yt-dlp', 'ffmpeg', 'ffprobe'].filter((t) => !isToolResolved(t));
+  if (missing.length > 0) {
+    console.error(`[Startup] ⚠️  Thiếu công cụ: ${missing.join(', ')}`);
+    console.error(`[Startup]     Đặt các file .exe vào: ${path.join(physicalDir, 'bin')}`);
+  }
+
   isServerReady = true;
+  console.log('[Startup] Server sẵn sàng.');
+});
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`[Startup] Cổng ${PORT} đã bị chiếm — có thể server đang chạy sẵn. Thoát.`);
+    process.exit(0);
+  }
+  console.error('[Startup] Không mở được cổng:', err.message);
+  process.exit(1);
 });

@@ -2,6 +2,7 @@ const { spawn } = require('child_process');
 const EventEmitter = require('events');
 const path = require('path');
 const fs = require('fs');
+const { getToolPath, isToolResolved } = require('./resolve-tools');
 
 function downloadVideo(url, outputDir, options = {}) {
   const emitter = new EventEmitter();
@@ -60,11 +61,22 @@ function downloadVideo(url, outputDir, options = {}) {
     url
   );
 
-  console.log(`[Downloader] yt-dlp args:`, args.join(' '));
+  const ytDlp = getToolPath('yt-dlp');
+  console.log(`[Downloader] ${ytDlp} ${args.join(' ')}`);
   emitter.emit('log', `Đang tải từ: ${url}`);
 
-  const proc = spawn('yt-dlp', args, {
+  const proc = spawn(ytDlp, args, {
     env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+    windowsHide: true,
+  });
+
+  let spawnFailed = false;
+  proc.on('error', (err) => {
+    spawnFailed = true;
+    emitter.emit('error', new Error(
+      `Không chạy được yt-dlp (${ytDlp}): ${err.message}\n` +
+      `Hãy mở tab Cài đặt trong extension và bấm "Tải công cụ", hoặc đặt yt-dlp.exe vào thư mục bin/.`
+    ));
   });
 
   proc.stdout.on('data', (data) => {
@@ -86,6 +98,7 @@ function downloadVideo(url, outputDir, options = {}) {
     if (cookieFile) {
       try { fs.unlinkSync(cookieFile); } catch (e) {}
     }
+    if (spawnFailed) return; // đã báo lỗi ở handler 'error'
     if (code !== 0) {
       return emitter.emit('error', new Error(`yt-dlp thoát với code ${code}\nLỗi: ${stderrData.substring(0, 500)}`));
     }
@@ -127,12 +140,17 @@ const proxyManager = require('./proxy-manager');
 async function getFormats(url, cookiesStr, useFallback = false, retryCount = 0, proxyLogs = []) {
   return new Promise(async (resolve, reject) => {
     const args = [
-      '-J', 
-      '--no-playlist', 
-      '--js-runtimes', 'node',
+      '-J',
+      '--no-playlist',
       '--remote-components', 'ejs:github'
     ];
-    
+
+    // Chỉ ép JS runtime khi thực sự tìm thấy node, nếu không yt-dlp sẽ báo lỗi
+    // "js runtime not available" trên máy chưa cài Node.js.
+    if (isToolResolved('node')) {
+      args.push('--js-runtimes', 'node');
+    }
+
     if (useFallback) {
       args.push('--extractor-args', 'youtube:player_client=ios,android,web');
     }
@@ -158,9 +176,12 @@ async function getFormats(url, cookiesStr, useFallback = false, retryCount = 0, 
 
     args.push(url);
 
-    const child = spawn('yt-dlp', args, {
+    const ytDlp = getToolPath('yt-dlp');
+    const child = spawn(ytDlp, args, {
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      windowsHide: true,
     });
+    let spawnFailed = false;
     let stdoutData = '';
     let stderrData = '';
 
@@ -171,7 +192,9 @@ async function getFormats(url, cookiesStr, useFallback = false, retryCount = 0, 
       if (cookieFile) {
         try { require('fs').unlinkSync(cookieFile); } catch (e) {}
       }
-      
+
+      if (spawnFailed) return; // đã reject ở handler 'error'
+
       if (code !== 0) {
         const errStr = stderrData.toLowerCase();
         const isBotBlocked = errStr.includes('sign in to confirm') || errStr.includes('bot') || errStr.includes('403');
@@ -223,7 +246,13 @@ async function getFormats(url, cookiesStr, useFallback = false, retryCount = 0, 
       }
     });
 
-    child.on('error', (err) => reject(new Error(`yt-dlp not found: ${err.message}`)));
+    child.on('error', (err) => {
+      spawnFailed = true;
+      reject(new Error(
+        `Không chạy được yt-dlp (${ytDlp}): ${err.message}\n` +
+        `Hãy mở tab Cài đặt trong extension và bấm "Tải công cụ", hoặc đặt yt-dlp.exe vào thư mục bin/.`
+      ));
+    });
   });
 }
 

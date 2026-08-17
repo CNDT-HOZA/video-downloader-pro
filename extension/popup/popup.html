@@ -50,9 +50,9 @@
         </svg>
       </div>
       <h3>Không thể kết nối server</h3>
-      <p>Chạy setup nếu chưa cài đặt, hoặc khởi động server thủ công:</p>
+      <p id="offlineDetail">Đang chờ server khởi động...</p>
       <div class="code-block">
-        <code>cd server && npm start</code>
+        <code id="offlineCmd">START_SERVER.bat</code>
         <button id="copyCmdBtn" title="Sao chép">Copy</button>
       </div>
       <button id="retryBtn" class="btn-retry mt-3">Thử lại</button>

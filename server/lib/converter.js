@@ -2,17 +2,20 @@ const { spawn } = require('child_process');
 const EventEmitter = require('events');
 const path = require('path');
 const fs = require('fs');
+const { getToolPath } = require('./resolve-tools');
 
 function getMediaInfo(inputPath) {
   return new Promise((resolve, reject) => {
-    const child = spawn('ffprobe', [
+    const ffprobe = getToolPath('ffprobe');
+    const child = spawn(ffprobe, [
       '-v', 'quiet',
       '-print_format', 'json',
       '-show_format',
       '-show_streams',
       inputPath
-    ]);
+    ], { windowsHide: true });
 
+    let spawnFailed = false;
     let stdoutData = '';
     let stderrData = '';
 
@@ -20,6 +23,7 @@ function getMediaInfo(inputPath) {
     child.stderr.on('data', (d) => { stderrData += d.toString(); });
 
     child.on('close', (code) => {
+      if (spawnFailed) return;
       if (code !== 0) return reject(new Error(`ffprobe failed (code ${code}): ${stderrData}`));
       try {
         resolve(JSON.parse(stdoutData));
@@ -29,7 +33,11 @@ function getMediaInfo(inputPath) {
     });
 
     child.on('error', (err) => {
-      reject(new Error(`ffprobe not found. Đảm bảo FFmpeg đã cài đặt: ${err.message}`));
+      spawnFailed = true;
+      reject(new Error(
+        `Không chạy được ffprobe (${ffprobe}): ${err.message}\n` +
+        `Hãy mở tab Cài đặt trong extension và bấm "Tải công cụ", hoặc đặt ffmpeg.exe + ffprobe.exe vào thư mục bin/.`
+      ));
     });
   });
 }
@@ -146,15 +154,17 @@ async function convertToMp4(inputPath, outputDir, options = {}) {
 
     args.push('-progress', 'pipe:1', '-y', tempOutputPath);
 
-    console.log(`[Converter] ffmpeg ${args.join(' ')}`);
+    const ffmpeg = getToolPath('ffmpeg');
+    console.log(`[Converter] ${ffmpeg} ${args.join(' ')}`);
     if (isRemux) {
       emitter.emit('log', `Đang đóng gói file sang MP4 (tốc độ siêu tốc vì giữ nguyên lõi H.264)...`);
     } else {
       emitter.emit('log', `Bắt đầu chuyển đổi sang ${codecLib.toUpperCase()}...`);
     }
 
-    const ffmpegProcess = spawn('ffmpeg', args);
+    const ffmpegProcess = spawn(ffmpeg, args, { windowsHide: true });
     const returnIsRemux = isRemux;
+    let ffmpegSpawnFailed = false;
 
     const totalDurationUs = durationSec * 1_000_000;
     let progressBuffer = '';
@@ -209,6 +219,7 @@ async function convertToMp4(inputPath, outputDir, options = {}) {
     });
 
     ffmpegProcess.on('close', (code) => {
+      if (ffmpegSpawnFailed) return; // đã báo lỗi ở handler 'error'
       if (code === 0) {
         // Xóa file temp gốc (MKV) + TẤT CẢ file trung gian yt-dlp (f251, f400, .part, ...)
         const taskIdMatch = path.basename(inputPath).match(/^temp_([a-f0-9-]+)_/);
@@ -266,12 +277,16 @@ async function convertToMp4(inputPath, outputDir, options = {}) {
     });
 
     ffmpegProcess.on('error', (err) => {
+      ffmpegSpawnFailed = true;
       try {
         if (fs.existsSync(tempOutputPath)) {
           fs.unlinkSync(tempOutputPath);
         }
       } catch (e) {}
-      emitter.emit('error', err);
+      emitter.emit('error', new Error(
+        `Không chạy được ffmpeg (${ffmpeg}): ${err.message}\n` +
+        `Hãy mở tab Cài đặt trong extension và bấm "Tải công cụ", hoặc đặt ffmpeg.exe vào thư mục bin/.`
+      ));
     });
 
     return { childProcess: ffmpegProcess, emitter, isRemux: returnIsRemux };

@@ -2,9 +2,13 @@
 
 const API_URL = 'http://localhost:3847';
 const NATIVE_HOST_NAME = 'com.video_downloader.server';
+const WATCHDOG_ALARM = 'vd-server-watchdog';
+const CONNECT_TIMEOUT_MS = 40000; // host.js chờ server tối đa ~30s ở lần chạy đầu
+
 const sseConnections = new Map();
 let nativePort = null;
 let serverStarting = false;
+let startingTimer = null;
 
 // === Side Panel: mở khi click icon extension ===
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
@@ -12,9 +16,25 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
 
 // === Native Messaging: tự khởi động server ===
 
+function clearStartingFlag() {
+  serverStarting = false;
+  if (startingTimer !== null) {
+    clearTimeout(startingTimer);
+    startingTimer = null;
+  }
+}
+
 function connectNativeHost() {
   if (nativePort || serverStarting) return;
   serverStarting = true;
+
+  // Nếu native host treo mà không trả lời cũng không ngắt kết nối, cờ này phải
+  // được gỡ ra, nếu không mọi lần thử sau đều bị chặn vĩnh viễn.
+  startingTimer = setTimeout(() => {
+    console.warn('[NativeHost] Qua han cho phan hoi, mo khoa de thu lai');
+    serverStarting = false;
+    startingTimer = null;
+  }, CONNECT_TIMEOUT_MS);
 
   try {
     nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
@@ -22,12 +42,18 @@ function connectNativeHost() {
     nativePort.onMessage.addListener((msg) => {
       console.log('[NativeHost]', msg);
       if (msg.type === 'status') {
-        serverStarting = false;
-        // Thông báo cho side panel biết server đã sẵn sàng hoặc lỗi
-        chrome.storage.local.set({ 
+        clearStartingFlag();
+        chrome.storage.local.set({
           serverStatus: msg.status,
-          serverErrorLog: msg.errorLog || ''
+          serverErrorLog: msg.errorLog || '',
+          serverMissingTools: msg.missingTools || [],
+          serverCheckedAt: Date.now()
         });
+
+        // Đã nhận kết quả thì thả native host ra cho nó thoát;
+        // server chạy nền (detached) nên không chết theo.
+        try { nativePort.disconnect(); } catch (e) {}
+        nativePort = null;
       }
     });
 
@@ -35,30 +61,85 @@ function connectNativeHost() {
       const error = chrome.runtime.lastError;
       if (error) {
         console.warn('[NativeHost] Disconnected:', error.message);
+        // Lỗi phổ biến: "Specified native messaging host not found"
+        // => chưa chạy setup.bat trên máy này.
+        chrome.storage.local.set({
+          serverStatus: 'host_missing',
+          serverErrorLog: error.message
+        });
       }
       nativePort = null;
-      serverStarting = false;
+      clearStartingFlag();
     });
 
   } catch (err) {
     console.error('[NativeHost] Connection failed:', err);
-    serverStarting = false;
+    nativePort = null;
+    clearStartingFlag();
   }
 }
 
-// Khởi động server khi extension start
-chrome.runtime.onStartup.addListener(() => {
+// === Watchdog: bảo đảm server luôn sống ===
+
+async function isServerUp() {
+  try {
+    const res = await fetch(`${API_URL}/api/health`, {
+      signal: AbortSignal.timeout(1500)
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    return data.status === 'ok' || data.status === 'installing';
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Chỉ gọi native host khi server thực sự chưa chạy */
+async function ensureServerRunning(reason) {
+  if (await isServerUp()) {
+    chrome.storage.local.set({ serverStatus: 'running', serverCheckedAt: Date.now() });
+    return true;
+  }
+  console.log(`[Watchdog] Server chua chay (${reason}) -> goi native host`);
   connectNativeHost();
+  return false;
+}
+
+async function installWatchdog() {
+  // Alarm đánh thức service worker kể cả khi nó đã bị Chrome tắt (MV3),
+  // nên server được kiểm tra đều đặn suốt phiên duyệt web.
+  //
+  // Phải kiểm tra trước khi tạo: alarms.create với cùng tên sẽ GHI ĐÈ alarm cũ
+  // và đặt lại bộ đếm. Hàm này chạy mỗi lần service worker thức dậy, nên nếu
+  // tạo vô điều kiện thì alarm bị dời liên tục và không bao giờ kêu.
+  const existing = await chrome.alarms.get(WATCHDOG_ALARM);
+  if (!existing) {
+    chrome.alarms.create(WATCHDOG_ALARM, { periodInMinutes: 1, delayInMinutes: 1 });
+  }
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === WATCHDOG_ALARM) {
+    ensureServerRunning('watchdog');
+  }
 });
 
-// Khởi động server khi extension được cài/reload
+// Khởi động server khi trình duyệt mở
+chrome.runtime.onStartup.addListener(() => {
+  installWatchdog();
+  ensureServerRunning('browser startup');
+});
+
+// Khi extension được cài / cập nhật / reload
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.set({ activeTasks: {}, serverStatus: 'checking' });
-  connectNativeHost();
+  installWatchdog();
+  ensureServerRunning('installed');
 });
 
-// Cũng thử kết nối khi service worker được activate
-connectNativeHost();
+// Mỗi lần service worker được đánh thức (click icon, mở tab video, alarm...)
+installWatchdog();
+ensureServerRunning('service worker activate');
 
 // === Message Handlers ===
 
@@ -70,7 +151,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     stopListeningToTask(request.taskId);
     sendResponse({ success: true });
   } else if (request.action === 'startServer') {
-    connectNativeHost();
+    ensureServerRunning('popup retry');
     sendResponse({ success: true });
   } else if (request.action === 'getActiveTasks') {
     chrome.storage.local.get(['activeTasks'], (res) => {

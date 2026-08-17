@@ -11,7 +11,8 @@
     "notifications",
     "sidePanel",
     "nativeMessaging",
-    "cookies"
+    "cookies",
+    "alarms"
   ],
   "host_permissions": [
     "http://localhost:3847/*",
