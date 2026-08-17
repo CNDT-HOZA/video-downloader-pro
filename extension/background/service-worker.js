@@ -23,8 +23,11 @@ function connectNativeHost() {
       console.log('[NativeHost]', msg);
       if (msg.type === 'status') {
         serverStarting = false;
-        // Thông báo cho side panel biết server đã sẵn sàng
-        chrome.storage.local.set({ serverStatus: msg.status });
+        // Thông báo cho side panel biết server đã sẵn sàng hoặc lỗi
+        chrome.storage.local.set({ 
+          serverStatus: msg.status,
+          serverErrorLog: msg.errorLog || ''
+        });
       }
     });
 

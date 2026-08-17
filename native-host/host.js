@@ -54,18 +54,23 @@ function checkServer() {
 }
 
 async function startServer() {
+  logDebug('startServer() called');
   const isRunning = await checkServer();
 
   if (isRunning) {
+    logDebug('Server already running');
     sendMessage({ type: 'status', status: 'already_running' });
     return;
   }
 
   try {
+    const logStream = fs.openSync(path.join(__dirname, 'server.log'), 'a');
+    
+    logDebug('Spawning server process: ' + process.execPath);
     const serverProcess = spawn(process.execPath, ['index.js'], {
       cwd: SERVER_DIR,
       detached: true,
-      stdio: 'ignore',
+      stdio: ['ignore', logStream, logStream],
       windowsHide: true
     });
 
@@ -79,10 +84,23 @@ async function startServer() {
       if (started) break;
     }
 
+    let errorLog = '';
+    if (!started) {
+      try {
+        const logPath = path.join(__dirname, 'server.log');
+        if (fs.existsSync(logPath)) {
+          const logContent = fs.readFileSync(logPath, 'utf8');
+          // Lấy 500 ký tự cuối cùng
+          errorLog = logContent.slice(-500);
+        }
+      } catch(e) {}
+    }
+
     sendMessage({
       type: 'status',
       status: started ? 'server_started' : 'start_failed',
-      pid: serverProcess.pid
+      pid: serverProcess.pid,
+      errorLog: errorLog
     });
   } catch (err) {
     sendMessage({ type: 'error', error: err.message });
@@ -106,6 +124,16 @@ function handleMessage(msg) {
       sendMessage({ type: 'error', error: 'Unknown action' });
   }
 }
+
+const fs = require('fs');
+
+function logDebug(msg) {
+  try {
+    fs.appendFileSync(path.join(__dirname, 'host_js.log'), `[${new Date().toISOString()}] ${msg}\n`);
+  } catch(e) {}
+}
+
+logDebug('host.js started');
 
 // Tự động khởi động server khi native host được kết nối
 startServer();
