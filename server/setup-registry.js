@@ -122,6 +122,64 @@ function verify(key, expectedPath) {
   }
 }
 
+function getManifestPath() {
+  return path.join(getAppDir(), `${HOST_NAME}.json`);
+}
+
+/**
+ * Đăng ký đã đúng và đầy đủ chưa?
+ * Dùng để tự sửa im lặng lúc server khởi động — chỉ ghi lại registry khi
+ * thật sự cần, tránh đụng vào registry ở mọi lần chạy.
+ */
+function isRegistrationCurrent() {
+  const manifestPath = getManifestPath();
+  const hostExePath = getHostExePath();
+
+  if (!fs.existsSync(manifestPath) || !fs.existsSync(hostExePath)) return false;
+
+  try {
+    const cfg = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    if (path.resolve(cfg.path || '').toLowerCase() !== path.resolve(hostExePath).toLowerCase()) {
+      return false;
+    }
+  } catch (e) {
+    return false;
+  }
+
+  return BROWSER_KEYS.every(([, key]) => verify(key, manifestPath));
+}
+
+/**
+ * Tự đăng ký lại nếu cần, không in gì trừ khi có thay đổi.
+ * Gọi lúc server khởi động: nhờ vậy chỉ cần chạy server MỘT LẦN bằng bất kỳ
+ * cách nào (bấm đúp server.exe, START_SERVER.bat...) là auto-start được thiết
+ * lập, không cần nhớ chạy setup.bat.
+ */
+function ensureRegistered() {
+  try {
+    // Chỉ tự đăng ký ở bản đóng gói. Chạy từ source (node index.js) thì
+    // getHostExePath() trỏ tới native-host/host.exe, tự đăng ký sẽ ghi đè
+    // cấu hình đang trỏ đúng vào server.exe của người dùng.
+    if (!process.pkg) return { changed: false, ok: true, skipped: true };
+
+    if (isRegistrationCurrent()) return { changed: false, ok: true };
+
+    const manifestPath = getManifestPath();
+    const hostExePath = getHostExePath();
+    if (!fs.existsSync(hostExePath)) {
+      return { changed: false, ok: false, error: 'Khong tim thay ' + hostExePath };
+    }
+
+    writeManifest(manifestPath, hostExePath);
+    importRegFile(manifestPath);
+
+    const okCount = BROWSER_KEYS.filter(([, key]) => verify(key, manifestPath)).length;
+    return { changed: true, ok: okCount > 0, count: okCount };
+  } catch (e) {
+    return { changed: false, ok: false, error: e.message };
+  }
+}
+
 function main() {
   const appDir = getAppDir();
   const manifestPath = path.join(appDir, `${HOST_NAME}.json`);
@@ -174,4 +232,4 @@ function main() {
   console.log(`  [OK] Da dang ky auto-start cho ${okCount} trinh duyet.`);
 }
 
-main();
+module.exports = { main, ensureRegistered, isRegistrationCurrent, getManifestPath };

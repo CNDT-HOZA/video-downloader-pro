@@ -65,6 +65,10 @@ echo   ---------------------------------------------
 echo.
 echo  Xong! Server se tu khoi dong khi ban mo trinh duyet.
 echo.
+echo  Ghi chu: tu ban nay, moi lan server chay no deu tu kiem tra va dang ky
+echo  lai neu can. Nen neu sau nay ban di chuyen thu muc, chi can chay
+echo  START_SERVER.bat mot lan la lien ket duoc noi lai.
+echo.
 echo  Neu server van khong tu chay, chay file CHAN-DOAN.bat
 echo  de biet chinh xac dang vuong o dau.
 echo.

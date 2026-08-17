@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const { exec, execSync } = require('child_process');
+const { exec, execSync, spawn } = require('child_process');
 const { resolveAllTools, isToolResolved, getAppDir } = require('./lib/resolve-tools');
 const TaskManager = require('./lib/task-manager');
 const { downloadVideo, getFormats } = require('./lib/downloader');
@@ -420,65 +420,103 @@ app.post('/api/open-folder', (req, res) => {
   }
 });
 
+/**
+ * Hộp thoại chọn thư mục.
+ *
+ * Vấn đề cốt lõi: tiến trình server chạy nền (được Chrome khởi động gián tiếp
+ * qua native host) nên Windows KHÔNG cho nó chiếm foreground. Cách cũ gọi
+ * Shell.BrowseForFolder với hwnd = 0 — hộp thoại có mở thật, nhưng không có
+ * cửa sổ cha nên bị chìm xuống dưới trình duyệt và người dùng tưởng là không
+ * hiện gì.
+ *
+ * Cách sửa: tạo một Form ẩn đặt TopMost làm cửa sổ cha. TopMost được vẽ đè lên
+ * mọi cửa sổ khác mà KHÔNG cần quyền foreground, nên hộp thoại luôn nhìn thấy.
+ */
+function buildPickerScript(resultFile, startDir) {
+  const q = (s) => String(s).replace(/'/g, "''"); // escape nháy đơn cho PowerShell
+
+  return [
+    'Add-Type -AssemblyName System.Windows.Forms',
+    'Add-Type -AssemblyName System.Drawing',
+    '$owner = New-Object System.Windows.Forms.Form',
+    '$owner.TopMost = $true',           // <- mấu chốt: luôn nổi lên trên
+    '$owner.ShowInTaskbar = $false',
+    "$owner.FormBorderStyle = 'None'",
+    '$owner.Opacity = 0',
+    '$owner.Size = New-Object System.Drawing.Size(1,1)',
+    "$owner.StartPosition = 'CenterScreen'",
+    '$owner.Show()',
+    '$owner.Activate()',
+    '[System.Windows.Forms.Application]::DoEvents()',
+    '',
+    '$dlg = New-Object System.Windows.Forms.FolderBrowserDialog',
+    "$dlg.Description = 'Chon thu muc luu video'",
+    '$dlg.ShowNewFolderButton = $true',
+    `if (Test-Path -LiteralPath '${q(startDir)}') { $dlg.SelectedPath = '${q(startDir)}' }`,
+    '',
+    '$result = $dlg.ShowDialog($owner)',
+    '$owner.Close()',
+    '',
+    'if ($result -eq [System.Windows.Forms.DialogResult]::OK) {',
+    `  Set-Content -LiteralPath '${q(resultFile)}' -Value $dlg.SelectedPath -Encoding UTF8`,
+    '} else {',
+    `  Set-Content -LiteralPath '${q(resultFile)}' -Value '__CANCELLED__' -Encoding UTF8`,
+    '}',
+  ].join('\r\n');
+}
+
 app.get('/api/pick-folder', (req, res) => {
   // Không dùng __dirname: dưới pkg nó là snapshot ảo chỉ đọc.
   // tmpdir luôn ghi được kể cả khi ứng dụng nằm trong Program Files.
   const stamp = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
   const resultFile = path.join(os.tmpdir(), `vd_pick_result_${stamp}.txt`);
-  const htaPath = path.join(os.tmpdir(), `vd_pick_folder_${stamp}.hta`);
+  const scriptFile = path.join(os.tmpdir(), `vd_pick_folder_${stamp}.ps1`);
 
-  // Xóa result cũ
   try { fs.unlinkSync(resultFile); } catch {}
 
-  const htaContent = `<html>
-<head><title>Chon thu muc</title>
-<HTA:APPLICATION ID="app" SHOWINTASKBAR="no" BORDER="none" INNERBORDER="no" CAPTION="no" WINDOWSTATE="minimize"/>
-<script language="VBScript">
-Sub Window_OnLoad
-  Dim shell, folder, fso
-  Set shell = CreateObject("Shell.Application")
-  Set folder = shell.BrowseForFolder(0, "Chon thu muc luu video", &H0040 + &H0010, "")
-  Set fso = CreateObject("Scripting.FileSystemObject")
-  Dim f
-  Set f = fso.CreateTextFile("${resultFile.replace(/\\/g, '\\\\')}", True)
-  If Not folder Is Nothing Then
-    f.WriteLine folder.Self.Path
-  Else
-    f.WriteLine "__CANCELLED__"
-  End If
-  f.Close
-  Self.Close
-End Sub
-</script></head><body></body></html>`;
-
   try {
-    fs.writeFileSync(htaPath, htaContent, 'utf-8');
+    // BOM UTF-8 bắt buộc: PowerShell 5.1 đọc file không BOM theo bảng mã ANSI,
+    // đường dẫn tiếng Việt sẽ hỏng.
+    fs.writeFileSync(scriptFile, '\uFEFF' + buildPickerScript(resultFile, OUTPUT_DIR), 'utf8');
   } catch (e) {
     return res.status(500).json({ error: `Không tạo được hộp thoại chọn thư mục: ${e.message}` });
   }
 
-  const mshta = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'mshta.exe');
-  const child = exec(`"${mshta}" "${htaPath}"`, { timeout: 120000, windowsHide: true });
+  const powershell = path.join(
+    process.env.SystemRoot || 'C:\\Windows',
+    'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'
+  );
+
+  // -STA bắt buộc cho WinForms; windowsHide chỉ giấu cửa sổ console của
+  // PowerShell, hộp thoại được tạo sau nên vẫn hiện bình thường.
+  const child = spawn(powershell, [
+    '-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', scriptFile
+  ], { windowsHide: true });
 
   let answered = false;
-  const finish = (payload) => {
+  const finish = (payload, status) => {
     if (answered) return;
     answered = true;
-    try { fs.unlinkSync(htaPath); } catch {}
+    try { fs.unlinkSync(scriptFile); } catch {}
     try { fs.unlinkSync(resultFile); } catch {}
-    res.json(payload);
+    res.status(status || 200).json(payload);
   };
 
+  const timer = setTimeout(() => {
+    try { child.kill(); } catch {}
+    finish({ cancelled: true, reason: 'timeout' });
+  }, 180000);
+
   child.on('error', (err) => {
-    if (answered) return;
-    answered = true;
-    try { fs.unlinkSync(htaPath); } catch {}
-    res.status(500).json({ error: `Không chạy được mshta.exe: ${err.message}` });
+    clearTimeout(timer);
+    finish({ error: `Không chạy được PowerShell: ${err.message}` }, 500);
   });
 
   child.on('close', () => {
+    clearTimeout(timer);
     try {
-      const selected = fs.readFileSync(resultFile, 'utf-8').trim();
+      // Set-Content -Encoding UTF8 của PowerShell 5.1 ghi kèm BOM, phải bỏ đi
+      const selected = fs.readFileSync(resultFile, 'utf8').replace(/^\uFEFF/, '').trim();
       if (!selected || selected === '__CANCELLED__') {
         return finish({ cancelled: true });
       }
@@ -526,6 +564,21 @@ const server = app.listen(PORT, async () => {
   console.log(`App Directory:    ${physicalDir}`);
   console.log(`Output Directory: ${OUTPUT_DIR}`);
   console.log(`=============================================\n`);
+
+  // Tự đăng ký Native Messaging Host nếu chưa đúng.
+  // Nhờ vậy chỉ cần chạy server MỘT LẦN bằng bất kỳ cách nào (bấm đúp
+  // server.exe, START_SERVER.bat) là auto-start được thiết lập — không phải
+  // nhớ chạy setup.bat, và tự sửa lại khi thư mục bị di chuyển.
+  try {
+    const reg = require('./setup-registry').ensureRegistered();
+    if (reg.changed && reg.ok) {
+      console.log(`[Setup] Da tu dang ky Native Messaging Host cho ${reg.count} trinh duyet.`);
+    } else if (reg.changed && !reg.ok) {
+      console.error(`[Setup] Tu dang ky that bai: ${reg.error || 'khong ro'}`);
+    }
+  } catch (err) {
+    console.error('[Setup] Bo qua tu dang ky:', err.message);
+  }
 
   // Tự động tải tool thiếu.
   // Bất kỳ lỗi nào ở đây cũng KHÔNG được chặn isServerReady — nếu không

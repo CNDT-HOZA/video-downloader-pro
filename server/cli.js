@@ -15,7 +15,7 @@ const isNativeHostLaunch = args.some(
 );
 
 if (args.includes('--setup')) {
-  require('./setup-registry.js');
+  require('./setup-registry.js').main();
 } else if (args.includes('--doctor')) {
   require('./doctor.js');
 } else if (args.includes('--server') || args.length === 0) {
