@@ -1,0 +1,15 @@
+node_modules/
+server/bin/
+server/_pick_result.txt
+server/_pick_folder.hta
+server/_pick_folder.ps1
+server/_pick_folder.vbs
+server/_test_pick2.ps1
+server/settings.json
+server/formats.json
+server/info.json
+output/
+Start Server.bat
+*.log
+*.tmp
+*.tmp.mp4

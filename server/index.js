@@ -1,0 +1,514 @@
+const express = require('express');
+const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
+const { exec, execSync } = require('child_process');
+const { resolveAllTools } = require('./lib/resolve-tools');
+const TaskManager = require('./lib/task-manager');
+const { downloadVideo, getFormats } = require('./lib/downloader');
+const { convertToMp4 } = require('./lib/converter');
+const proxyManager = require('./lib/proxy-manager');
+const { ensureAllTools } = require('./lib/auto-install');
+
+// Load proxies ngay khi khởi động
+proxyManager.fetchProxies();
+
+// Không gọi resolveAllTools() ở đây để tránh báo lỗi giả trước khi auto-install chạy
+
+const os = require('os');
+const app = express();
+const PORT = 3847;
+
+let OUTPUT_DIR = path.join(os.homedir(), 'Downloads');
+const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+
+try {
+  if (fs.existsSync(SETTINGS_FILE)) {
+    const settings = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+    if (settings.outputDir) {
+      OUTPUT_DIR = settings.outputDir;
+    }
+  }
+} catch (err) {
+  console.error('Error loading settings:', err);
+}
+
+try {
+  if (!fs.existsSync(OUTPUT_DIR)) {
+    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+  }
+} catch (err) {
+  console.error(`[Warning] Could not create ${OUTPUT_DIR}, using local output folder.`);
+  OUTPUT_DIR = path.resolve(__dirname, '..', 'output');
+  if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+}
+
+app.use(cors());
+app.use(express.json());
+
+const taskManager = new TaskManager(2);
+
+const convertQueue = [];
+let activeConverts = 0;
+const MAX_CONVERTS = 1;
+
+function processConvertQueue() {
+  if (activeConverts >= MAX_CONVERTS || convertQueue.length === 0) return;
+  const job = convertQueue.shift();
+  activeConverts++;
+  startConvertTask(job.taskId, job.downloadedPath);
+}
+
+async function startConvertTask(taskId, downloadedPath) {
+  const task = taskManager.getTask(taskId);
+  if (!task) {
+    activeConverts--;
+    processConvertQueue();
+    return;
+  }
+
+  const ext = path.extname(downloadedPath).toLowerCase();
+  taskManager.addLog(taskId, `Đang chuẩn bị xử lý file (${ext.replace('.','').toUpperCase()})...`);
+  taskManager.updateTask(taskId, { status: 'converting', stage: 'convert', progress: 0, format: ext, childProcess: null });
+
+  try {
+    const result = await convertToMp4(downloadedPath, OUTPUT_DIR, task.options);
+    const { childProcess: convProcess, emitter: convEmitter, isRemux } = result;
+
+    if (isRemux) {
+      taskManager.updateTask(taskId, { stage: 'remux', childProcess: convProcess });
+    } else {
+      taskManager.updateTask(taskId, { childProcess: convProcess });
+    }
+
+    convEmitter.on('progress', (pct) => {
+      taskManager.updateTask(taskId, { progress: pct });
+    });
+
+    convEmitter.on('log', (msg) => {
+      taskManager.addLog(taskId, msg);
+    });
+
+    convEmitter.on('complete', (finalPath) => {
+      taskManager.addLog(taskId, `✅ Hoàn tất: ${finalPath}`);
+      taskManager.updateTask(taskId, { status: 'done', stage: 'done', progress: 100, outputPath: finalPath, childProcess: null });
+      activeConverts--;
+      processConvertQueue();
+    });
+
+    convEmitter.on('error', (err) => {
+      taskManager.addLog(taskId, `❌ Lỗi chuyển đổi: ${err.message}`);
+      taskManager.updateTask(taskId, { status: 'error', error: err.message, childProcess: null });
+      activeConverts--;
+      processConvertQueue();
+    });
+  } catch (convErr) {
+    taskManager.addLog(taskId, `❌ Lỗi khởi tạo converter: ${convErr.message}`);
+    taskManager.updateTask(taskId, { status: 'error', error: convErr.message, childProcess: null });
+    activeConverts--;
+    processConvertQueue();
+  }
+}
+
+taskManager.on('task:start', async (taskId) => {
+  const task = taskManager.getTask(taskId);
+  if (!task) return;
+
+  // Nếu là task đang ở bước convert (do retry), đẩy thẳng vào hàng đợi
+  if (task.stage === 'convert' && task.downloadedPath) {
+    taskManager.addLog(taskId, `Đang xếp hàng chờ Convert...`);
+    convertQueue.push({ taskId, downloadedPath: task.downloadedPath });
+    processConvertQueue();
+    return;
+  }
+
+  try {
+    taskManager.addLog(taskId, `Bắt đầu tải: ${task.url}`);
+    taskManager.updateTask(taskId, { status: 'downloading', stage: 'download', progress: 0, error: null });
+
+    const { childProcess: dlProcess, emitter: dlEmitter } = downloadVideo(task.url, OUTPUT_DIR, task.options);
+    taskManager.updateTask(taskId, { childProcess: dlProcess });
+
+    dlEmitter.on('progress', (pct) => {
+      taskManager.updateTask(taskId, { progress: pct });
+    });
+
+    dlEmitter.on('log', (msg) => {
+      taskManager.addLog(taskId, msg);
+    });
+
+    dlEmitter.on('complete', async (downloadedPath) => {
+      taskManager.updateTask(taskId, { downloadedPath, childProcess: null });
+      taskManager.addLog(taskId, `Tải xong, đang xếp hàng chờ Convert...`);
+      convertQueue.push({ taskId, downloadedPath });
+      processConvertQueue();
+    });
+
+    dlEmitter.on('error', (err) => {
+      taskManager.addLog(taskId, `❌ Lỗi tải: ${err.message}`);
+      taskManager.updateTask(taskId, { status: 'error', error: err.message, childProcess: null });
+    });
+
+  } catch (error) {
+    taskManager.addLog(taskId, `❌ Lỗi: ${error.message}`);
+    taskManager.updateTask(taskId, { status: 'error', error: error.message });
+  }
+});
+
+// Endpoints
+
+let isServerReady = false;
+
+app.get('/api/health', (req, res) => {
+  if (!isServerReady) {
+    return res.json({ status: 'installing', version: '1.0.0' });
+  }
+  res.json({ status: 'ok', version: '1.0.0' });
+});
+
+app.all('/api/formats', async (req, res) => {
+  try {
+    const url = req.method === 'POST' ? req.body.url : req.query.url;
+    const cookies = req.method === 'POST' ? req.body.cookies : null;
+    
+    if (!url) return res.status(400).json({ error: 'URL is required' });
+    
+    const info = await getFormats(url, cookies);
+    res.json(info);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/download', (req, res) => {
+  const { url, quality, codec, keepOriginalRes, targetRes, formatId, cookies, proxy } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL is required' });
+  
+  const options = { codec: codec || 'h264', keepOriginalRes, targetRes, cookies, proxy };
+
+  if (formatId) {
+    options.formatId = formatId;
+  } else {
+    const qualityMap = { '2160': 'best4k', '1440': 'best1440', '1080': 'best1080', '720': 'best1080', 'best': 'best' };
+    options.quality = qualityMap[quality] || quality || 'best';
+  }
+
+  const taskId = taskManager.createTask(url, options);
+  res.json({ taskId, message: 'Download started' });
+});
+
+app.get('/api/status/:taskId', (req, res) => {
+  const { taskId } = req.params;
+  const task = taskManager.getTask(taskId);
+  
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  
+  res.write(`data: ${JSON.stringify(task)}\n\n`);
+  
+  const onUpdate = (id, updatedTask) => {
+    if (id === taskId) {
+      res.write(`data: ${JSON.stringify(updatedTask)}\n\n`);
+      if (['done', 'error', 'cancelled'].includes(updatedTask.status)) {
+        res.end();
+        taskManager.removeListener('task:update', onUpdate);
+      }
+    }
+  };
+  
+  taskManager.on('task:update', onUpdate);
+  
+  req.on('close', () => {
+    taskManager.removeListener('task:update', onUpdate);
+  });
+});
+
+app.get('/api/history', (req, res) => {
+  res.json(taskManager.getAllTasks());
+});
+
+app.delete('/api/cancel/:taskId', (req, res) => {
+  const { taskId } = req.params;
+  const success = taskManager.cancelTask(taskId);
+  
+  if (success) {
+    res.json({ message: 'Task cancelled' });
+  } else {
+    res.status(404).json({ error: 'Task not found' });
+  }
+});
+
+app.post('/api/retry/:taskId', (req, res) => {
+  const { taskId } = req.params;
+  const task = taskManager.getTask(taskId);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+
+  if (task.status !== 'error' && task.status !== 'paused') {
+    return res.status(400).json({ error: 'Only failed/paused tasks can be retried' });
+  }
+
+  taskManager.addLog(taskId, 'Đang tiếp tục tải (từ dữ liệu cũ)...');
+  
+  // Xóa error, giữ nguyên stage để biết tiếp tục từ đâu
+  taskManager.updateTask(taskId, { status: 'pending', error: null, progress: 0 });
+
+  // Đẩy lại vào queue của taskManager
+  taskManager.queue.push(taskId);
+  taskManager._processQueue();
+
+  res.json({ message: 'Retry initiated' });
+});
+
+app.post('/api/pause/:taskId', (req, res) => {
+  const { taskId } = req.params;
+  const task = taskManager.getTask(taskId);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+
+  if (task.status !== 'downloading' && task.status !== 'converting') {
+    return res.status(400).json({ error: 'Task is not active' });
+  }
+
+  // Kill process nhưng giữ file tạm (yt-dlp --continue sẽ tiếp tục)
+  if (task.childProcess) {
+    try { task.childProcess.kill('SIGTERM'); } catch(e) {}
+  }
+
+  const pausedStage = task.status; // 'downloading' hoặc 'converting'
+  taskManager.addLog(taskId, `⏸️ Đã tạm dừng (${pausedStage === 'downloading' ? 'đang tải' : 'đang chuyển đổi'})`);
+  taskManager.updateTask(taskId, { status: 'paused', pausedStage, childProcess: null });
+
+  // Nếu đang convert thì giảm activeConverts
+  if (pausedStage === 'converting') {
+    activeConverts--;
+    processConvertQueue();
+  }
+
+  res.json({ message: 'Task paused' });
+});
+
+app.post('/api/resume/:taskId', (req, res) => {
+  const { taskId } = req.params;
+  const task = taskManager.getTask(taskId);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+
+  if (task.status !== 'paused') {
+    return res.status(400).json({ error: 'Task is not paused' });
+  }
+
+  taskManager.addLog(taskId, '▶️ Đang tiếp tục...');
+
+  if (task.pausedStage === 'converting' && task.downloadedPath) {
+    // Tiếp tục convert
+    taskManager.updateTask(taskId, { status: 'converting', error: null });
+    convertQueue.push({ taskId, downloadedPath: task.downloadedPath });
+    processConvertQueue();
+  } else {
+    // Tiếp tục download (yt-dlp --continue sẽ nối tiếp file .part)
+    taskManager.updateTask(taskId, { status: 'pending', error: null, progress: 0 });
+    taskManager.queue.push(taskId);
+    taskManager._processQueue();
+  }
+
+  res.json({ message: 'Task resumed' });
+});
+
+app.delete('/api/clear-completed', (req, res) => {
+  const success = taskManager.clearCompletedTasks();
+  res.json({ success, message: 'Cleared completed tasks' });
+});
+
+app.get('/api/check-tools', async (req, res) => {
+  try {
+    const paths = resolveAllTools();
+    const toolsToCheck = ['ffmpeg', 'ffprobe', 'yt-dlp', 'deno'];
+    const results = [];
+
+    for (const name of toolsToCheck) {
+      let installed = false;
+      let version = null;
+      let toolPath = paths[name] || null;
+
+      try {
+        if (!toolPath && name === 'deno') {
+          try {
+            const denoPath = execSync('where deno', { encoding: 'utf8', windowsHide: true }).split('\n')[0].trim();
+            if (denoPath) toolPath = denoPath;
+          } catch (e) {
+            // where command failed
+          }
+        }
+
+        if (toolPath || name === 'deno') {
+          const versionFlag = (name === 'ffmpeg' || name === 'ffprobe') ? '-version' : '--version';
+          const cmd = toolPath ? `"${toolPath}" ${versionFlag}` : `${name} ${versionFlag}`;
+          const output = execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+          installed = true;
+          version = output.split('\n')[0].trim();
+        }
+      } catch (e) {
+        installed = false;
+      }
+
+      results.push({ name, installed, version, path: toolPath });
+    }
+
+    res.json({ tools: results });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/install-tool', async (req, res) => {
+  const { tool } = req.body;
+  const { installYtDlp, installFFmpeg } = require('./lib/auto-install');
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  res.write('data: ' + JSON.stringify({ log: 'Đang tải ' + tool + '...' }) + '\n\n');
+
+  try {
+    let ok = false;
+    if (tool === 'yt-dlp') {
+      ok = await installYtDlp();
+    } else if (tool === 'ffmpeg' || tool === 'ffprobe') {
+      ok = await installFFmpeg();
+    } else if (tool === 'deno') {
+      // Bỏ qua deno, không bắt buộc
+      ok = true;
+    }
+
+    if (ok) {
+      resolveAllTools();
+      res.write('data: ' + JSON.stringify({ success: true, message: 'Đã cài đặt xong ' + tool }) + '\n\n');
+    } else {
+      res.write('data: ' + JSON.stringify({ success: false, message: 'Lỗi khi tải ' + tool }) + '\n\n');
+    }
+  } catch (e) {
+    res.write('data: ' + JSON.stringify({ success: false, message: e.message }) + '\n\n');
+  }
+  res.end();
+});
+
+app.post('/api/open-folder', (req, res) => {
+  let { path: folderPath } = req.body;
+  
+  try {
+    if (!folderPath || !fs.existsSync(folderPath)) {
+      // Fallback: Mở thư mục gốc nếu file không còn tồn tại hoặc không được cấp
+      if (fs.existsSync(OUTPUT_DIR)) {
+        exec(`explorer.exe "${OUTPUT_DIR}"`);
+        return res.json({ success: true, fallback: true });
+      }
+      return res.status(404).json({ error: 'Path not found' });
+    }
+
+    const stats = fs.statSync(folderPath);
+    if (stats.isDirectory()) {
+      exec(`explorer.exe "${folderPath}"`);
+    } else {
+      exec(`explorer.exe /select,"${folderPath}"`);
+    }
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/pick-folder', (req, res) => {
+  const resultFile = path.join(__dirname, '_pick_result.txt');
+  const htaPath = path.join(__dirname, '_pick_folder.hta');
+  
+  // Xóa result cũ
+  try { fs.unlinkSync(resultFile); } catch {}
+  
+  const htaContent = `<html>
+<head><title>Chon thu muc</title>
+<HTA:APPLICATION ID="app" SHOWINTASKBAR="no" BORDER="none" INNERBORDER="no" CAPTION="no" WINDOWSTATE="minimize"/>
+<script language="VBScript">
+Sub Window_OnLoad
+  Dim shell, folder, fso
+  Set shell = CreateObject("Shell.Application")
+  Set folder = shell.BrowseForFolder(0, "Chon thu muc luu video", &H0040 + &H0010, "")
+  Set fso = CreateObject("Scripting.FileSystemObject")
+  Dim f
+  Set f = fso.CreateTextFile("${resultFile.replace(/\\/g, '\\\\')}", True)
+  If Not folder Is Nothing Then
+    f.WriteLine folder.Self.Path
+  Else
+    f.WriteLine "__CANCELLED__"
+  End If
+  f.Close
+  Self.Close
+End Sub
+</script></head><body></body></html>`;
+
+  fs.writeFileSync(htaPath, htaContent, 'utf-8');
+  
+  const mshta = path.join('C:\\Windows\\System32', 'mshta.exe');
+  const child = exec(`"${mshta}" "${htaPath}"`, { timeout: 120000 });
+  
+  child.on('close', () => {
+    try { fs.unlinkSync(htaPath); } catch {}
+    try {
+      const selected = fs.readFileSync(resultFile, 'utf-8').trim();
+      fs.unlinkSync(resultFile);
+      if (!selected || selected === '__CANCELLED__') {
+        return res.json({ cancelled: true });
+      }
+      res.json({ path: selected });
+    } catch {
+      res.json({ cancelled: true });
+    }
+  });
+});
+
+app.get('/api/settings', (req, res) => {
+  res.json({ outputDir: OUTPUT_DIR });
+});
+
+app.post('/api/settings', (req, res) => {
+  const { outputDir } = req.body;
+  if (!outputDir) return res.status(400).json({ error: 'outputDir is required' });
+
+  try {
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    OUTPUT_DIR = outputDir;
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ outputDir: OUTPUT_DIR }, null, 2));
+
+    res.json({ success: true, outputDir: OUTPUT_DIR });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+app.listen(PORT, async () => {
+  console.log(`\n=============================================`);
+  console.log(`Video Downloader Server starting...`);
+  console.log(`Listening on http://localhost:${PORT}`);
+  console.log(`Output Directory: ${OUTPUT_DIR}`);
+  console.log(`=============================================\n`);
+
+  // Tự động tải tool thiếu
+  await ensureAllTools();
+  // Re-resolve để nhận tool mới
+  const { resolveAllTools } = require('./lib/resolve-tools');
+  resolveAllTools();
+  
+  isServerReady = true;
+});

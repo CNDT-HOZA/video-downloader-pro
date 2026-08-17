@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Video Downloader Pro</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="app-container">
+    <div id="setupScreen" class="setup-screen hidden">
+      <div class="setup-header">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2" width="32" height="32"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>
+        <h2>Kiểm tra tài nguyên</h2>
+      </div>
+      <div id="toolsList" class="tools-list"></div>
+      <button id="installAllBtn" class="btn-gradient w-full mt-4 hidden">Cài đặt tất cả</button>
+      <div id="setupStatus" class="setup-status"></div>
+    </div>
+
+    <!-- Header -->
+    <header class="header">
+      <div class="header-title">
+        <svg class="header-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 3V16M12 16L8 12M12 16L16 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M4 21H20" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <h1>Video Downloader Pro</h1>
+      </div>
+      <div class="server-status connecting" id="serverStatus" title="Đang kết nối...">
+        <div class="status-dot"></div>
+        <span class="status-label" id="statusLabel">Đang kết nối</span>
+      </div>
+    </header>
+
+    <!-- Server Starting State -->
+    <div id="startingState" class="card status-card hidden">
+      <div class="status-icon loading">
+        <div class="spinner-large"></div>
+      </div>
+      <h3>Đang khởi động server...</h3>
+      <p>Server sẽ tự động khởi động. Vui lòng chờ trong giây lát.</p>
+    </div>
+
+    <!-- Server Offline State -->
+    <div id="offlineState" class="card status-card hidden">
+      <div class="status-icon warning">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+        </svg>
+      </div>
+      <h3>Không thể kết nối server</h3>
+      <p>Chạy setup nếu chưa cài đặt, hoặc khởi động server thủ công:</p>
+      <div class="code-block">
+        <code>cd server && npm start</code>
+        <button id="copyCmdBtn" title="Sao chép">Copy</button>
+      </div>
+      <button id="retryBtn" class="btn-retry mt-3">Thử lại</button>
+    </div>
+
+    <!-- Main Content -->
+    <div id="mainContent" class="hidden">
+      <!-- URL Input -->
+      <div class="card input-section">
+        <div class="detected-url-wrapper hidden" id="detectedUrlWrapper">
+          <span class="badge">Phát hiện:</span>
+          <span class="detected-url" id="detectedUrlText"></span>
+          <button id="useDetectedUrlBtn" class="btn-small">Dùng URL này</button>
+        </div>
+        <div class="input-group">
+          <input type="text" id="urlInput" placeholder="Dán link video vào đây...">
+          <button id="pasteBtn" class="btn-icon" title="Dán từ clipboard">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+          </button>
+        </div>
+        <button id="analyzeBtn" class="btn-primary w-full mt-3">
+          <span class="btn-text">Phân tích</span>
+          <div class="spinner hidden"></div>
+        </button>
+      </div>
+
+      <!-- Video Info -->
+      <div id="videoInfoCard" class="card video-card hidden">
+        <div class="video-preview">
+          <img id="videoThumb" src="" alt="Thumbnail">
+          <div id="videoPlatform" class="platform-badge">YouTube</div>
+          <div id="videoDuration" class="duration-badge">00:00</div>
+        </div>
+        <div class="video-details">
+          <h3 id="videoTitle" class="truncate-text">Tên video...</h3>
+          
+          <div class="form-group mt-3">
+            <label>Chất lượng</label>
+            <select id="qualitySelect" class="custom-select">
+              <option value="best">⚡ Tốt nhất (tự chọn)</option>
+            </select>
+          </div>
+
+          <div class="options-row mt-3">
+            <div class="form-group">
+              <label>Định dạng output</label>
+              <select id="formatSelect" class="custom-select">
+                <option value="h264">MP4 (H.264)</option>
+                <option value="h265">MP4 (H.265)</option>
+              </select>
+            </div>
+            <label class="checkbox-container">
+              <input type="checkbox" id="keepResToggle" checked>
+              <span class="checkmark"></span>
+              Giữ resolution gốc
+            </label>
+          </div>
+          
+          <button id="downloadBtn" class="btn-gradient w-full mt-4">
+            Tải xuống & Chuyển đổi
+          </button>
+        </div>
+      </div>
+
+      <!-- Active Tasks -->
+      <div class="tasks-section mt-4">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <h3 class="section-title" style="margin-bottom: 0;">Tiến trình</h3>
+          <button id="clearCompletedBtn" class="btn-icon" style="color: #9898a6;" title="Xóa các video đã tải xong">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+          </button>
+        </div>
+        <div id="taskList" class="task-list">
+          <div class="empty-state">Chưa có tác vụ nào</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="form-group">
+        <label>📁 Thư mục lưu</label>
+        <div class="folder-input-row">
+          <input type="text" id="outputDirInput" class="custom-input" placeholder="Đường dẫn thư mục..." readonly>
+          <button id="changeFolderBtn" class="btn-icon" title="Thay đổi">✏️</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <p>Video được lưu tại: <code>Download Video/output</code></p>
+    </footer>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
