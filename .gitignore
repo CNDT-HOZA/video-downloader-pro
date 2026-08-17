@@ -2,8 +2,6 @@ node_modules/
 
 # Binaries lon — KHONG commit, phai kem trong file zip khi chuyen may.
 # Xem PHAN-PHOI.md de biet danh sach file bat buoc.
-server/bin/
-server/server.exe
 
 # File sinh ra luc chay
 server/com.video_downloader.server.json

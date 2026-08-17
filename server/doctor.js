@@ -26,6 +26,19 @@ const BROWSER_KEYS = [
 
 const problems = [];
 
+/**
+ * Việc người dùng thực sự cần làm.
+ * Tách riêng khỏi `problems` vì phần lớn lỗi là hệ quả dây chuyền: thiếu
+ * manifest kéo theo 7 khoá registry hỏng và 4 thư viện chưa tải — nhưng tất cả
+ * chỉ cần MỘT hành động. Liệt kê 12 lỗi ngang hàng làm người dùng hoảng
+ * và không biết bắt đầu từ đâu.
+ */
+const actions = new Map(); // key -> { order, text }
+
+function needAction(key, order, text) {
+  if (!actions.has(key)) actions.set(key, { order, text });
+}
+
 function section(title) {
   console.log('');
   console.log('=== ' + title + ' ===');
@@ -96,8 +109,9 @@ function checkLocation() {
   const dir = appDir();
   console.log('  Thu muc : ' + toAscii(dir));
   console.log('  Exe     : ' + toAscii(process.execPath));
+  // Doi chieu voi may goc: sai phien ban la nguyen nhan pho bien nhat
+  try { console.log('  Phien ban: ' + require('./package.json').version); } catch (e) {}
   try {
-    // Cho phep doi chieu: ban exe da copy sang may nay co dung ban moi nhat khong
     console.log('  Build   : ' + fs.statSync(process.execPath).mtime.toLocaleString());
   } catch (e) {}
 
@@ -122,19 +136,53 @@ function checkLocation() {
 // --- 2. Cong cu --------------------------------------------------------------
 
 function checkTools() {
-  section('2. Cong cu trong bin/');
+  section('2. Cong cu');
+
   const bin = path.join(appDir(), 'bin');
-  if (!fs.existsSync(bin)) {
-    warn('Chua co thu muc bin/. Server se tu tai ve o lan chay dau (can Internet).');
+  console.log('  Thu muc bin/: ' + (fs.existsSync(bin) ? toAscii(bin) : 'chua co (server se tu tai ve)'));
+  console.log('');
+
+  let rt;
+  try {
+    rt = require('./lib/resolve-tools');
+    // Tam tat log cua resolve-tools cho ban chan doan de doc
+    const saved = [console.log, console.warn, console.error];
+    console.log = console.warn = console.error = () => {};
+    try {
+      rt.resolveAllTools();
+    } finally {
+      [console.log, console.warn, console.error] = saved;
+    }
+  } catch (e) {
+    bad('Khong nap duoc resolve-tools: ' + e.message);
     return;
   }
-  for (const name of ['yt-dlp.exe', 'ffmpeg.exe', 'ffprobe.exe']) {
-    const p = path.join(bin, name);
-    if (fs.existsSync(p)) {
-      ok(name + ' (' + (fs.statSync(p).size / 1048576).toFixed(1) + ' MB)');
+
+  for (const name of ['yt-dlp', 'ffmpeg', 'ffprobe']) {
+    if (rt.isToolResolved(name)) {
+      ok(name.padEnd(8) + toAscii(rt.getToolPath(name)));
     } else {
-      warn(name + ' thieu - server se tu tai ve');
+      bad(name.padEnd(8) + 'KHONG TIM THAY');
+      detail('=> Server se tu tai ve o lan chay sau (can Internet).');
+      needAction('tools', 3, 'Bat server mot lan de no tu tai thu vien (~230MB, can Internet).');
     }
+  }
+
+  // JS runtime: thieu la YouTube bao "n challenge solving failed" va chi tai
+  // duoc anh, du yt-dlp/ffmpeg deu day du.
+  console.log('');
+  const hasDeno = rt.isToolResolved('deno');
+  const hasNode = rt.isToolResolved('node');
+  if (hasDeno) ok('deno    ' + toAscii(rt.getToolPath('deno')));
+  if (hasNode) ok('node    ' + toAscii(rt.getToolPath('node')));
+
+  if (hasDeno || hasNode) {
+    ok('JS runtime: co (' + (hasDeno ? 'deno' : 'node') + ') - tai YouTube duoc');
+  } else {
+    bad('JS runtime: KHONG CO (thieu ca deno lan node)');
+    detail('=> YouTube se bao "n challenge solving failed" va chi tai duoc anh.');
+    detail('=> Server se tu tai Node.js ve o lan chay sau.');
+    needAction('tools', 3, 'Bat server mot lan de no tu tai thu vien (~230MB, can Internet).');
   }
 }
 
@@ -147,6 +195,7 @@ function checkManifest() {
   if (!fs.existsSync(manifestPath)) {
     bad('Chua co file manifest: ' + manifestPath);
     detail('=> CHUA CHAY setup.bat tren may nay. Hay chay setup.bat.');
+    needAction('setup', 1, 'Chay setup.bat (bam dup, khong can quyen Admin).');
     return null;
   }
   ok('Co file: ' + manifestPath);
@@ -162,12 +211,19 @@ function checkManifest() {
   console.log('  path            : ' + toAscii(cfg.path));
   console.log('  allowed_origins : ' + toAscii((cfg.allowed_origins || []).join(', ')));
 
-  if (!cfg.path || !fs.existsSync(cfg.path)) {
+  // Tren Windows, Chrome cho phep path tuong doi so voi thu muc chua manifest.
+  // Ban zip xuat xuong dung dang tuong doi de khong phu thuoc may nao.
+  const resolvedExe = cfg.path
+    ? path.resolve(path.dirname(manifestPath), cfg.path)
+    : '';
+
+  if (!cfg.path || !fs.existsSync(resolvedExe)) {
     bad('manifest.path tro toi file KHONG TON TAI.');
     detail('=> Thu muc da bi di chuyen. Chay lai setup.bat.');
-  } else if (process.pkg && !samePath(cfg.path, process.execPath)) {
+    needAction('setup', 1, 'Chay setup.bat (bam dup, khong can quyen Admin).');
+  } else if (process.pkg && !samePath(resolvedExe, process.execPath)) {
     bad('manifest.path tro toi exe KHAC voi exe dang chay.');
-    detail('manifest : ' + cfg.path);
+    detail('manifest : ' + resolvedExe);
     detail('hien tai : ' + process.execPath);
     detail('=> Chay lai setup.bat.');
   } else {
@@ -196,11 +252,13 @@ function checkRegistry(manifestPath) {
       bad(`${label}: tro toi file khong ton tai`);
       detail('-> ' + value);
       detail('=> Thu muc da bi di chuyen. Chay lai setup.bat.');
+      needAction('setup', 1, 'Chay setup.bat (bam dup, khong can quyen Admin).');
     } else if (manifestPath && !samePath(value, manifestPath)) {
       bad(`${label}: tro toi manifest KHAC`);
       detail('registry : ' + value);
       detail('hien tai : ' + manifestPath);
       detail('=> Chay lai setup.bat.');
+      needAction('setup', 1, 'Chay setup.bat (bam dup, khong can quyen Admin).');
     } else {
       ok(`${label}`);
     }
@@ -209,6 +267,7 @@ function checkRegistry(manifestPath) {
   if (found === 0) {
     bad('KHONG co trinh duyet nao duoc dang ky.');
     detail('=> CHAY setup.bat tren may nay (bam dup, khong can quyen Admin).');
+    needAction('setup', 1, 'Chay setup.bat (bam dup, khong can quyen Admin).');
   }
 }
 
@@ -247,6 +306,7 @@ function checkLogs() {
       warn(name + ': chua co. Trinh duyet CHUA he goi native host lan nao.');
       if (name === 'host_js.log') {
         warn('  => Extension chua duoc cai/reload, hoac registry chua dung.');
+        needAction('ext', 2, 'Vao chrome://extensions -> Developer mode -> Load unpacked -> chon thu muc extension (neu da cai thi bam reload).');
       }
       continue;
     }
@@ -285,7 +345,24 @@ async function main() {
     console.log('      - Neu thay "Access to the specified native messaging host');
     console.log('        is forbidden" => ID extension khong khop allowed_origins');
   } else {
-    console.log('  Phat hien ' + problems.length + ' van de:');
+    // Phan lon loi la he qua day chuyen (thieu manifest -> 7 khoa registry
+    // hong -> 4 thu vien chua tai). In danh sach VIEC CAN LAM, khong dumb
+    // 12 dong loi ngang hang khien nguoi dung khong biet bat dau tu dau.
+    const todo = [...actions.values()].sort((a, b) => a.order - b.order);
+
+    console.log('  VIEC CAN LAM (theo dung thu tu):');
+    console.log('');
+    todo.forEach((a, i) => console.log('   ' + (i + 1) + '. ' + a.text));
+
+    if (todo.length > 0 && todo[0].text.startsWith('Chay setup.bat')) {
+      console.log('');
+      console.log('  Chi can lam buoc 1 la phan lon loi ben tren tu het:');
+      console.log('  setup.bat ghi lai file manifest, cac khoa registry se tro dung');
+      console.log('  vao no, roi trinh duyet moi goi duoc server.');
+    }
+
+    console.log('');
+    console.log('  --- Chi tiet ' + problems.length + ' van de da phat hien ---');
     for (const p of problems) console.log('   - ' + p);
   }
   console.log('');

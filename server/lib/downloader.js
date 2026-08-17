@@ -4,6 +4,32 @@ const path = require('path');
 const fs = require('fs');
 const { getToolPath, isToolResolved } = require('./resolve-tools');
 
+/**
+ * Tham số JS runtime cho yt-dlp.
+ *
+ * YouTube bắt giải "n challenge" bằng JavaScript; không có runtime thì yt-dlp
+ * chỉ lấy được ảnh và báo "Requested format is not available".
+ *
+ * Hai điểm bắt buộc, đều từng làm hỏng chức năng tải:
+ *
+ *  1. PHẢI truyền --js-runtimes. Mặc định yt-dlp đánh dấu node là
+ *     "(unavailable)" dù node.exe nằm trong PATH — cờ này mới bật nó lên.
+ *  2. PHẢI kèm đường dẫn tuyệt đối (cú pháp RUNTIME:PATH). Server dựng lại PATH
+ *     từ registry, mà nhiều bản cài (deno/node qua WinGet) không ghi vào registry
+ *     PATH, nên tiến trình con không thấy chúng.
+ *
+ * Truyền cả deno lẫn node nếu có; yt-dlp tự ưu tiên deno.
+ */
+function jsRuntimeArgs() {
+  const args = [];
+  for (const name of ['deno', 'node']) {
+    if (isToolResolved(name)) {
+      args.push('--js-runtimes', `${name}:${getToolPath(name)}`);
+    }
+  }
+  return args;
+}
+
 function downloadVideo(url, outputDir, options = {}) {
   const emitter = new EventEmitter();
 
@@ -33,6 +59,7 @@ function downloadVideo(url, outputDir, options = {}) {
     '--no-playlist',
     '--merge-output-format', 'mkv',
     '--remote-components', 'ejs:github',
+    ...jsRuntimeArgs(),
     '--continue',
     '--socket-timeout', '60',
     '--retries', '30',
@@ -142,14 +169,9 @@ async function getFormats(url, cookiesStr, useFallback = false, retryCount = 0, 
     const args = [
       '-J',
       '--no-playlist',
-      '--remote-components', 'ejs:github'
+      '--remote-components', 'ejs:github',
+      ...jsRuntimeArgs()
     ];
-
-    // Chỉ ép JS runtime khi thực sự tìm thấy node, nếu không yt-dlp sẽ báo lỗi
-    // "js runtime not available" trên máy chưa cài Node.js.
-    if (isToolResolved('node')) {
-      args.push('--js-runtimes', 'node');
-    }
 
     if (useFallback) {
       args.push('--extractor-args', 'youtube:player_client=ios,android,web');

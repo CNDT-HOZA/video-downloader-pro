@@ -7,9 +7,11 @@ const { execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
-// node là tuỳ chọn (yt-dlp dùng làm JS runtime), thiếu thì chỉ cảnh báo
-const TOOL_NAMES = ['ffmpeg', 'ffprobe', 'yt-dlp', 'node'];
-const OPTIONAL_TOOLS = ['node'];
+// deno/node là JS runtime cho yt-dlp (giải n-challenge của YouTube).
+// Chỉ cần MỘT trong hai, nên thiếu thì chỉ cảnh báo.
+// deno đứng trước vì yt-dlp ưu tiên nó hơn node.
+const TOOL_NAMES = ['ffmpeg', 'ffprobe', 'yt-dlp', 'deno', 'node'];
+const OPTIONAL_TOOLS = ['deno', 'node'];
 const resolvedPaths = {};
 
 /**

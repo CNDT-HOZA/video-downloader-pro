@@ -31,7 +31,13 @@ const downloadBtn = document.getElementById('downloadBtn');
 const taskList = document.getElementById('taskList');
 
 const outputDirInput = document.getElementById('outputDirInput');
-const changeFolderBtn = document.getElementById('changeFolderBtn');
+const browseFolderBtn = document.getElementById('browseFolderBtn');
+
+const startingTitle = document.getElementById('startingTitle');
+const startingDetail = document.getElementById('startingDetail');
+const installProgress = document.getElementById('installProgress');
+const installBarFill = document.getElementById('installBarFill');
+const installProgressText = document.getElementById('installProgressText');
 const setupScreen = document.getElementById('setupScreen');
 const toolsList = document.getElementById('toolsList');
 const installAllBtn = document.getElementById('installAllBtn');
@@ -98,6 +104,45 @@ async function describeOfflineReason() {
   }
 }
 
+const TOOL_LABELS = {
+  'yt-dlp': 'yt-dlp',
+  ffmpeg: 'FFmpeg',
+  node: 'Node.js',
+};
+
+// Hiện tiến độ tải thư viện ở lần chạy đầu (gần 200MB nên phải cho thấy tiến độ)
+function renderInstallProgress(install) {
+  if (!installProgress) return;
+
+  if (!install || !install.active) {
+    installProgress.classList.add('hidden');
+    if (startingTitle) startingTitle.textContent = 'Đang khởi động server...';
+    if (startingDetail) startingDetail.textContent = 'Server sẽ tự động khởi động. Vui lòng chờ trong giây lát.';
+    return;
+  }
+
+  installProgress.classList.remove('hidden');
+
+  const label = TOOL_LABELS[install.tool] || install.tool || 'thư viện';
+  const remaining = (install.pending || []).length;
+
+  if (startingTitle) startingTitle.textContent = `Đang cài đặt ${label}...`;
+  if (startingDetail) {
+    startingDetail.textContent = remaining > 1
+      ? `Máy chưa có sẵn thư viện cần thiết. Còn ${remaining} mục, chỉ tải một lần duy nhất.`
+      : 'Máy chưa có sẵn thư viện cần thiết. Chỉ tải một lần duy nhất.';
+  }
+
+  const pct = Math.max(0, Math.min(100, install.percent || 0));
+  if (installBarFill) installBarFill.style.width = pct + '%';
+
+  if (installProgressText) {
+    installProgressText.textContent = install.totalMB
+      ? `${label}: ${pct}%  —  ${install.downloadedMB}/${install.totalMB} MB`
+      : `${label}: đang xử lý...`;
+  }
+}
+
 async function checkServer() {
   try {
     const res = await fetch(`${API_URL}/api/health`, {
@@ -108,8 +153,10 @@ async function checkServer() {
       const data = await res.json();
       if (data.status === 'installing') {
         setServerState('installing');
+        renderInstallProgress(data.install);
         return false;
       }
+      renderInstallProgress(null);
       setServerState('online');
       return true;
     }
@@ -634,60 +681,73 @@ async function loadSettings() {
       const data = await res.json();
       if (data.outputDir) {
         outputDirInput.value = data.outputDir;
+        outputDirInput.title = data.outputDir;
       }
     }
   } catch(e) {}
 }
 
-if (changeFolderBtn && outputDirInput) {
-  changeFolderBtn.onclick = () => {
-    if (outputDirInput.hasAttribute('readonly')) {
-      // Bật chế độ chỉnh sửa
-      outputDirInput.removeAttribute('readonly');
-      outputDirInput.style.opacity = '1';
-      outputDirInput.style.borderColor = 'var(--accent-blue)';
-      outputDirInput.focus();
-      outputDirInput.select();
-      changeFolderBtn.textContent = '💾';
-      changeFolderBtn.title = 'Lưu';
-    } else {
-      // Lưu
-      saveOutputDir();
-    }
-  };
+if (outputDirInput) {
+  let picking = false;
 
-  const saveOutputDir = async () => {
-    const val = outputDirInput.value.trim();
-    if (!val) {
-      showToast('Vui lòng nhập đường dẫn thư mục', 'error');
-      return;
-    }
-    outputDirInput.setAttribute('readonly', 'true');
-    outputDirInput.style.borderColor = '';
-    changeFolderBtn.textContent = '✏️';
-    changeFolderBtn.title = 'Thay đổi';
+  const applyOutputDir = async (dir) => {
     try {
       const res = await fetch(`${API_URL}/api/settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ outputDir: val })
+        body: JSON.stringify({ outputDir: dir })
       });
-      if (res.ok) showToast('Đã đổi thư mục lưu', 'info');
-      else showToast('Lỗi lưu thư mục', 'error');
-    } catch(e) {
+      if (res.ok) {
+        outputDirInput.value = dir;
+        showToast('Đã đổi thư mục lưu', 'info');
+        return true;
+      }
+      const err = await res.json().catch(() => ({}));
+      showToast(err.error || 'Lỗi lưu thư mục', 'error');
+    } catch (e) {
       showToast('Lỗi kết nối server', 'error');
+    }
+    return false;
+  };
+
+  // === Chọn thư mục bằng cửa sổ hệ thống ===
+  const browseFolder = async () => {
+    if (picking) return;
+
+    picking = true;
+    const previous = outputDirInput.value;
+    const bar = outputDirInput.closest('.folder-bar');
+    if (bar) bar.classList.add('picking');
+    outputDirInput.value = 'Đang mở cửa sổ chọn...';
+
+    try {
+      // Server giữ kết nối cho tới khi người dùng bấm Chọn hoặc Huỷ,
+      // nên không đặt timeout ngắn ở đây.
+      const res = await fetch(`${API_URL}/api/pick-folder`);
+      const data = await res.json();
+
+      outputDirInput.value = previous;
+
+      if (data.error) {
+        showToast(data.error, 'error');
+      } else if (data.path) {
+        await applyOutputDir(data.path);
+      }
+      // data.cancelled: người dùng bấm Huỷ, không cần báo gì
+    } catch (e) {
+      outputDirInput.value = previous;
+      showToast('Không mở được cửa sổ chọn thư mục', 'error');
+    } finally {
+      if (bar) bar.classList.remove('picking');
+      outputDirInput.title = outputDirInput.value; // duong dan dai bi cat thi hover xem duoc
+      picking = false;
     }
   };
 
-  outputDirInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') saveOutputDir();
-    if (e.key === 'Escape') {
-      outputDirInput.setAttribute('readonly', 'true');
-      outputDirInput.style.borderColor = '';
-      changeFolderBtn.textContent = '✏️';
-      loadSettings(); // Reset về giá trị cũ
-    }
-  });
+  // Chỉ có một cách đổi thư mục: mở cửa sổ chọn của Windows.
+  // Nhập đường dẫn bằng tay đã bỏ — dễ gõ sai và không kiểm tra được.
+  outputDirInput.addEventListener('click', browseFolder);
+  if (browseFolderBtn) browseFolderBtn.onclick = browseFolder;
 }
 
 async function runSetupCheck() {

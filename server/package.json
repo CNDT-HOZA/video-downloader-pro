@@ -1,6 +1,6 @@
 {
   "name": "video-downloader-server",
-  "version": "1.0.0",
+  "version": "1.1.5",
   "description": "Local server for Video Downloader Chrome Extension",
   "main": "index.js",
   "scripts": {

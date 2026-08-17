@@ -40,10 +40,10 @@ body::-webkit-scrollbar-track { background: transparent; }
 body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
 
 .app-container {
-  padding: 20px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 8px;
   min-height: 100vh;
 }
 
@@ -52,7 +52,7 @@ body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding-bottom: 16px;
+  padding-bottom: 10px;
   border-bottom: 1px solid rgba(255,255,255,0.06);
 }
 
@@ -125,7 +125,7 @@ body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius
 .card {
   background: var(--bg-card);
   border-radius: var(--border-radius-lg);
-  padding: 16px;
+  padding: 12px;
   border: 1px solid rgba(255,255,255,0.05);
   box-shadow: 0 2px 12px rgba(0,0,0,0.25);
   animation: fadeIn 0.25s ease;
@@ -138,9 +138,9 @@ body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius
 
 .hidden { display: none !important; }
 .w-full { width: 100%; }
-.mt-2 { margin-top: 8px; }
-.mt-3 { margin-top: 12px; }
-.mt-4 { margin-top: 16px; }
+.mt-2 { margin-top: 6px; }
+.mt-3 { margin-top: 8px; }
+.mt-4 { margin-top: 10px; }
 
 /* ===== Buttons ===== */
 button {
@@ -453,20 +453,20 @@ input::placeholder { color: var(--text-muted); }
 
 /* ===== Tasks Section ===== */
 .section-title {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   font-weight: 600;
-  margin-bottom: 12px;
+  margin-bottom: 6px;
 }
 
-.task-list { display: flex; flex-direction: column; gap: 8px; }
+.task-list { display: flex; flex-direction: column; gap: 6px; }
 
 .task-item {
   background: var(--bg-input);
   border-radius: var(--border-radius-md);
-  padding: 14px;
+  padding: 10px 12px;
   border: 1px solid rgba(255,255,255,0.04);
   animation: fadeIn 0.2s ease;
   transition: border-color 0.2s;
@@ -477,7 +477,7 @@ input::placeholder { color: var(--text-muted); }
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 .task-title {
   font-size: 13px;
@@ -605,7 +605,7 @@ input::placeholder { color: var(--text-muted); }
 /* ===== Footer ===== */
 .footer {
   text-align: center;
-  padding: 16px 0 8px;
+  padding: 8px 0 4px;
   font-size: 11px;
   color: var(--text-muted);
   border-top: 1px solid rgba(255,255,255,0.04);
@@ -671,11 +671,6 @@ input::placeholder { color: var(--text-muted); }
   padding: 12px 0;
   border-top: 1px solid rgba(255, 255, 255, 0.04);
 }
-.folder-input-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
 .custom-input {
   flex: 1;
   background: var(--bg-input);
@@ -690,3 +685,77 @@ input::placeholder { color: var(--text-muted); }
 }
 .custom-input:focus { border-color: var(--accent-blue); }
 .custom-input[readonly] { opacity: 0.7; cursor: default; }
+
+/* === Thanh thu muc luu: mot dong gon dat tren cung, khong tieu de === */
+.folder-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  margin-bottom: 8px;
+  border-radius: var(--border-radius-md);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.folder-bar-icon {
+  font-size: 12px;
+  line-height: 1;
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+.folder-bar-path {
+  flex: 1;
+  min-width: 0;              /* cho phep text-overflow hoat dong trong flex */
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 2px 0;
+  color: var(--text-secondary, #9898a6);
+  font-family: 'Inter', sans-serif;
+  font-size: 11px;
+  cursor: pointer;
+  text-overflow: ellipsis;   /* duong dan dai thi cat bot, khong xuong dong */
+  white-space: nowrap;
+  overflow: hidden;
+}
+.folder-bar-path:hover { color: var(--text-primary); }
+.folder-bar-btn {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--accent-blue, #3b82f6);
+  font-family: 'Inter', sans-serif;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.folder-bar-btn:hover { background: rgba(59, 130, 246, 0.12); }
+.folder-bar.picking { opacity: 0.55; }
+.folder-bar.picking .folder-bar-path { cursor: progress; }
+
+/* === Tien do tai thu vien === */
+.install-progress {
+  margin-top: 14px;
+}
+.install-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.install-bar-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 3px;
+  background: var(--accent-blue, #3b82f6);
+  transition: width 0.3s ease;
+}
+.install-progress-text {
+  margin-top: 7px;
+  font-size: 12px;
+  color: var(--text-secondary, #9898a6);
+  font-variant-numeric: tabular-nums;
+}
+

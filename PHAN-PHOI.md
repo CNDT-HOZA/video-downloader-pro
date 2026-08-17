@@ -7,20 +7,36 @@ Máy đích **không cần** Node.js, **không cần** Python, không cần quy�
 ```
 Download Video/
 ├── setup.bat                     ← người dùng chạy file này
+├── CHAN-DOAN.bat
+├── START_SERVER.bat
 ├── extension/                    ← toàn bộ thư mục
 └── server/
-    ├── server.exe                ← BẮT BUỘC (build bằng BUILD.bat)
-    └── bin/                      ← nên kèm, nếu thiếu server sẽ tự tải (~190MB)
-        ├── yt-dlp.exe
-        ├── ffmpeg.exe
-        └── ffprobe.exe
+    └── server.exe                ← BẮT BUỘC (build bằng BUILD.bat)
 ```
 
-> `server/bin/` và `server/server.exe` bị `.gitignore` loại ra, nên **chuyển bằng
-> `git clone` sẽ thiếu**. Phải nén zip thủ công.
+Chỉ khoảng **40MB**. Không cần kèm `server/bin/`.
 
-`server/bin/node/` (~85MB) là tuỳ chọn: yt-dlp dùng nó làm JS runtime để giải mã
-YouTube. Không có nó thì vẫn chạy, nhưng một số video YouTube có thể lỗi.
+> `server/server.exe` bị `.gitignore` loại ra, nên **chuyển bằng `git clone` sẽ
+> thiếu**. Phải nén zip thủ công hoặc tải từ Releases.
+
+## Thư viện được tải tự động
+
+Lần đầu server chạy, nó kiểm tra rồi tự tải những gì còn thiếu vào `server/bin/`:
+
+| Thư viện | Dung lượng tải | Nguồn |
+|---|---|---|
+| yt-dlp.exe | ~18MB | github.com/yt-dlp |
+| ffmpeg.exe + ffprobe.exe | ~178MB | github.com/GyanD/codexffmpeg |
+| node.exe | ~35MB | nodejs.org |
+
+Tổng ~230MB, **chỉ tải một lần**. Trong lúc tải, `/api/health` trả về
+`status: "installing"` kèm tiến độ, và extension hiện thanh phần trăm.
+
+Nếu máy đích mạng yếu, có thể kèm sẵn `server/bin/` vào zip để bỏ qua bước này —
+server thấy có đủ file thì không tải nữa.
+
+`node.exe` dùng làm JS runtime cho yt-dlp khi giải mã YouTube. Thiếu nó thì các
+trang khác vẫn tải được, riêng YouTube có thể lỗi.
 
 ## Các bước trên máy đích
 

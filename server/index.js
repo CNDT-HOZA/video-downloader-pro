@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const { exec, execSync, spawn } = require('child_process');
+const { execSync, spawn } = require('child_process');
 const { resolveAllTools, isToolResolved, getAppDir } = require('./lib/resolve-tools');
 const TaskManager = require('./lib/task-manager');
 const { downloadVideo, getFormats } = require('./lib/downloader');
@@ -18,6 +18,7 @@ proxyManager.fetchProxies();
 const os = require('os');
 const app = express();
 const PORT = 3847;
+const PKG_VERSION = (() => { try { return require('./package.json').version; } catch (e) { return '0.0.0'; } })();
 
 let OUTPUT_DIR = path.join(os.homedir(), 'Downloads');
 
@@ -164,14 +165,22 @@ let startupError = null;
 
 app.get('/api/health', (req, res) => {
   if (!isServerReady) {
-    return res.json({ status: 'installing', version: '1.0.0' });
+    // Kèm tiến độ tải thư viện để extension hiện thanh progress thay vì
+    // spinner trống — lần chạy đầu có thể phải tải gần 200MB.
+    let install = null;
+    try { install = require('./lib/auto-install').getInstallProgress(); } catch (e) {}
+    return res.json({ status: 'installing', version: PKG_VERSION, install });
   }
 
   const missing = ['yt-dlp', 'ffmpeg', 'ffprobe'].filter((t) => !isToolResolved(t));
+  // Thiếu JS runtime thì YouTube tải hỏng dù đủ 3 tool trên
+  if (!isToolResolved('deno') && !isToolResolved('node')) missing.push('js-runtime');
+
   res.json({
     status: 'ok',
-    version: '1.0.0',
+    version: PKG_VERSION,
     missingTools: missing,
+    jsRuntime: isToolResolved('deno') ? 'deno' : (isToolResolved('node') ? 'node' : null),
     startupError: startupError || undefined,
   });
 });
@@ -395,25 +404,48 @@ app.post('/api/install-tool', async (req, res) => {
   res.end();
 });
 
+/**
+ * Mở Explorer mà KHÔNG nháy cửa sổ đen.
+ *
+ * exec() chạy lệnh thông qua cmd.exe, và chính cửa sổ console của cmd nháy lên
+ * một nhịp rồi tắt. spawn() gọi thẳng explorer.exe thì không có tiến trình
+ * trung gian nào, và explorer.exe là chương trình GUI nên Windows không cấp
+ * console cho nó — không còn gì để nháy.
+ *
+ * TUYỆT ĐỐI KHÔNG đặt windowsHide: true ở đây. Cờ đó truyền SW_HIDE vào
+ * STARTUPINFO, mà explorer.exe có tuân theo — kết quả là bấm "mở thư mục"
+ * không thấy gì xảy ra. (Đã đo: cùng lệnh, có cờ thì không cửa sổ nào mở,
+ * bỏ cờ thì mở bình thường.)
+ *
+ * explorer.exe thoát với mã 1 ngay cả khi thành công, nên không kiểm tra mã thoát.
+ */
+function openInExplorer(target, select) {
+  const explorer = path.join(process.env.SystemRoot || 'C:\\Windows', 'explorer.exe');
+  const args = select ? [`/select,${target}`] : [target];
+
+  const child = spawn(explorer, args, {
+    detached: true,
+    stdio: 'ignore',
+  });
+  child.on('error', (err) => console.error('[OpenFolder] ' + err.message));
+  child.unref();
+}
+
 app.post('/api/open-folder', (req, res) => {
   let { path: folderPath } = req.body;
-  
+
   try {
     if (!folderPath || !fs.existsSync(folderPath)) {
       // Fallback: Mở thư mục gốc nếu file không còn tồn tại hoặc không được cấp
       if (fs.existsSync(OUTPUT_DIR)) {
-        exec(`explorer.exe "${OUTPUT_DIR}"`);
+        openInExplorer(OUTPUT_DIR, false);
         return res.json({ success: true, fallback: true });
       }
       return res.status(404).json({ error: 'Path not found' });
     }
 
     const stats = fs.statSync(folderPath);
-    if (stats.isDirectory()) {
-      exec(`explorer.exe "${folderPath}"`);
-    } else {
-      exec(`explorer.exe /select,"${folderPath}"`);
-    }
+    openInExplorer(folderPath, !stats.isDirectory());
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -432,37 +464,158 @@ app.post('/api/open-folder', (req, res) => {
  * Cách sửa: tạo một Form ẩn đặt TopMost làm cửa sổ cha. TopMost được vẽ đè lên
  * mọi cửa sổ khác mà KHÔNG cần quyền foreground, nên hộp thoại luôn nhìn thấy.
  */
+/**
+ * Sinh script PowerShell mở hộp thoại chọn thư mục.
+ *
+ * Dùng IFileOpenDialog (Common Item Dialog, có từ Vista) với cờ FOS_PICKFOLDERS
+ * — đây là hộp thoại Explorer hiện đại: có thanh bên Quick access, ô địa chỉ,
+ * ô tìm kiếm. KHÔNG dùng System.Windows.Forms.FolderBrowserDialog vì trên
+ * .NET Framework (PowerShell 5.1) nó vẫn là cây thư mục kiểu Windows XP.
+ *
+ * Cửa sổ cha là một Form ẩn đặt TopMost: cửa sổ con của một cửa sổ topmost
+ * cũng nằm trong lớp topmost, nên hộp thoại luôn hiện trên trình duyệt dù
+ * tiến trình server chạy nền và không có quyền chiếm foreground.
+ */
 function buildPickerScript(resultFile, startDir) {
   const q = (s) => String(s).replace(/'/g, "''"); // escape nháy đơn cho PowerShell
 
-  return [
-    'Add-Type -AssemblyName System.Windows.Forms',
-    'Add-Type -AssemblyName System.Drawing',
-    '$owner = New-Object System.Windows.Forms.Form',
-    '$owner.TopMost = $true',           // <- mấu chốt: luôn nổi lên trên
-    '$owner.ShowInTaskbar = $false',
-    "$owner.FormBorderStyle = 'None'",
-    '$owner.Opacity = 0',
-    '$owner.Size = New-Object System.Drawing.Size(1,1)',
-    "$owner.StartPosition = 'CenterScreen'",
-    '$owner.Show()',
-    '$owner.Activate()',
-    '[System.Windows.Forms.Application]::DoEvents()',
-    '',
-    '$dlg = New-Object System.Windows.Forms.FolderBrowserDialog',
-    "$dlg.Description = 'Chon thu muc luu video'",
-    '$dlg.ShowNewFolderButton = $true',
-    `if (Test-Path -LiteralPath '${q(startDir)}') { $dlg.SelectedPath = '${q(startDir)}' }`,
-    '',
-    '$result = $dlg.ShowDialog($owner)',
-    '$owner.Close()',
-    '',
-    'if ($result -eq [System.Windows.Forms.DialogResult]::OK) {',
-    `  Set-Content -LiteralPath '${q(resultFile)}' -Value $dlg.SelectedPath -Encoding UTF8`,
-    '} else {',
-    `  Set-Content -LiteralPath '${q(resultFile)}' -Value '__CANCELLED__' -Encoding UTF8`,
-    '}',
-  ].join('\r\n');
+  return String.raw`
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class VdFolderPicker
+{
+    [ComImport, Guid("DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7")]
+    private class FileOpenDialogRCW { }
+
+    [ComImport, Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IShellItem
+    {
+        void BindToHandler();
+        void GetParent();
+        void GetDisplayName(uint sigdnName, out IntPtr ppszName);
+        void GetAttributes();
+        void Compare();
+    }
+
+    // Thu tu ham PHAI dung y vtable: IModalWindow -> IFileDialog -> IFileOpenDialog
+    [ComImport, Guid("d57c7288-d4ad-4768-be02-9d969532d960"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IFileOpenDialog
+    {
+        [PreserveSig] int Show(IntPtr parent);          // IModalWindow
+        void SetFileTypes();
+        void SetFileTypeIndex();
+        void GetFileTypeIndex();
+        void Advise();
+        void Unadvise();
+        void SetOptions(uint fos);
+        void GetOptions(out uint fos);
+        void SetDefaultFolder(IShellItem psi);
+        void SetFolder(IShellItem psi);
+        void GetFolder();
+        void GetCurrentSelection();
+        void SetFileName();
+        void GetFileName();
+        void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string pszTitle);
+        void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string pszText);
+        void SetFileNameLabel();
+        void GetResult(out IShellItem ppsi);
+        void AddPlace();
+        void SetDefaultExtension();
+        void Close();
+        void SetClientGuid();
+        void ClearClientData();
+        void SetFilter();
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    private static extern void SHCreateItemFromParsingName(
+        [MarshalAs(UnmanagedType.LPWStr)] string pszPath, IntPtr pbc,
+        [MarshalAs(UnmanagedType.LPStruct)] Guid riid,
+        [MarshalAs(UnmanagedType.Interface)] out IShellItem ppv);
+
+    private const uint FOS_PICKFOLDERS     = 0x00000020;
+    private const uint FOS_FORCEFILESYSTEM = 0x00000040;
+    private const uint FOS_NOCHANGEDIR     = 0x00000008;
+    private const uint SIGDN_FILESYSPATH   = 0x80058000;
+    private const int  ERROR_CANCELLED     = unchecked((int)0x800704C7);
+
+    /// <summary>Tra ve duong dan da chon, hoac null neu nguoi dung huy.</summary>
+    public static string Pick(IntPtr owner, string title, string startDir)
+    {
+        var dialog = (IFileOpenDialog)(new FileOpenDialogRCW());
+        uint options;
+        dialog.GetOptions(out options);
+        dialog.SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR);
+        dialog.SetTitle(title);
+        dialog.SetOkButtonLabel("Chon thu muc nay");
+
+        if (!string.IsNullOrEmpty(startDir) && System.IO.Directory.Exists(startDir))
+        {
+            try
+            {
+                IShellItem start;
+                SHCreateItemFromParsingName(startDir, IntPtr.Zero,
+                    new Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe"), out start);
+                dialog.SetFolder(start);
+            }
+            catch { /* thu muc cu khong con, mo o mac dinh */ }
+        }
+
+        int hr = dialog.Show(owner);
+        if (hr == ERROR_CANCELLED) return null;
+        if (hr != 0) Marshal.ThrowExceptionForHR(hr);
+
+        IShellItem item;
+        dialog.GetResult(out item);
+        IntPtr ptr;
+        item.GetDisplayName(SIGDN_FILESYSPATH, out ptr);
+        try { return Marshal.PtrToStringUni(ptr); }
+        finally { Marshal.FreeCoTaskMem(ptr); }
+    }
+}
+"@
+
+# Form an, TopMost, lam cua so cha => hop thoai luon noi len tren trinh duyet
+$owner = New-Object System.Windows.Forms.Form
+$owner.TopMost = $true
+$owner.ShowInTaskbar = $false
+$owner.FormBorderStyle = 'None'
+$owner.Opacity = 0
+$owner.Size = New-Object System.Drawing.Size(1, 1)
+$owner.StartPosition = 'CenterScreen'
+$owner.Show()
+$owner.Activate()
+[System.Windows.Forms.Application]::DoEvents()
+
+$selected = $null
+try {
+    $selected = [VdFolderPicker]::Pick($owner.Handle, 'Chon thu muc luu video', '__START__')
+} catch {
+    # Du phong: neu Common Item Dialog loi thi quay ve hop thoai cu
+    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dlg.Description = 'Chon thu muc luu video'
+    $dlg.ShowNewFolderButton = $true
+    if (Test-Path -LiteralPath '__START__') { $dlg.SelectedPath = '__START__' }
+    if ($dlg.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
+        $selected = $dlg.SelectedPath
+    }
+}
+$owner.Close()
+
+if ([string]::IsNullOrEmpty($selected)) { $selected = '__CANCELLED__' }
+Set-Content -LiteralPath '__RESULT__' -Value $selected -Encoding UTF8
+`
+    // Dùng hàm thay thế: nếu đường dẫn chứa ký tự $ thì dạng chuỗi sẽ bị
+    // String.replace hiểu là $&, $' ... và làm hỏng đường dẫn.
+    .replace(/__START__/g, () => q(startDir))
+    .replace(/__RESULT__/g, () => q(resultFile));
 }
 
 app.get('/api/pick-folder', (req, res) => {

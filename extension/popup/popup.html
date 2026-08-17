@@ -38,8 +38,12 @@
       <div class="status-icon loading">
         <div class="spinner-large"></div>
       </div>
-      <h3>Đang khởi động server...</h3>
-      <p>Server sẽ tự động khởi động. Vui lòng chờ trong giây lát.</p>
+      <h3 id="startingTitle">Đang khởi động server...</h3>
+      <p id="startingDetail">Server sẽ tự động khởi động. Vui lòng chờ trong giây lát.</p>
+      <div id="installProgress" class="install-progress hidden">
+        <div class="install-bar"><div id="installBarFill" class="install-bar-fill"></div></div>
+        <div id="installProgressText" class="install-progress-text"></div>
+      </div>
     </div>
 
     <!-- Server Offline State -->
@@ -60,6 +64,15 @@
 
     <!-- Main Content -->
     <div id="mainContent" class="hidden">
+      <!-- Thu muc luu: mot dong gon, khong tieu de -->
+      <div class="folder-bar">
+        <span class="folder-bar-icon">📁</span>
+        <input type="text" id="outputDirInput" class="folder-bar-path"
+               placeholder="Đang tải..." readonly
+               title="Bấm để chọn thư mục lưu">
+        <button id="browseFolderBtn" class="folder-bar-btn" title="Chọn thư mục lưu">Đổi</button>
+      </div>
+
       <!-- URL Input -->
       <div class="card input-section">
         <div class="detected-url-wrapper hidden" id="detectedUrlWrapper">
@@ -131,19 +144,9 @@
       </div>
     </div>
 
-    <div class="settings-section">
-      <div class="form-group">
-        <label>📁 Thư mục lưu</label>
-        <div class="folder-input-row">
-          <input type="text" id="outputDirInput" class="custom-input" placeholder="Đường dẫn thư mục..." readonly>
-          <button id="changeFolderBtn" class="btn-icon" title="Thay đổi">✏️</button>
-        </div>
-      </div>
-    </div>
-
     <!-- Footer -->
     <footer class="footer">
-      <p>Video được lưu tại: <code>Download Video/output</code></p>
+      <p>Bấm vào đường dẫn ở trên để đổi nơi lưu</p>
     </footer>
   </div>
   <script src="popup.js"></script>

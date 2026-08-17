@@ -139,7 +139,10 @@ function isRegistrationCurrent() {
 
   try {
     const cfg = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    if (path.resolve(cfg.path || '').toLowerCase() !== path.resolve(hostExePath).toLowerCase()) {
+    // Chrome cho phep path tuong doi (so voi thu muc chua manifest) tren Windows.
+    // Ban zip xuat xuong o dang tuong doi de khong dinh vao may nao.
+    const declared = path.resolve(path.dirname(manifestPath), cfg.path || '');
+    if (declared.toLowerCase() !== path.resolve(hostExePath).toLowerCase()) {
       return false;
     }
   } catch (e) {
