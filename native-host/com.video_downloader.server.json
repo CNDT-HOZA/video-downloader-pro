@@ -1,7 +1,7 @@
 {
   "name": "com.video_downloader.server",
   "description": "Video Downloader Pro - Server Launcher",
-  "path": "C:\\Users\\hoang\\OneDrive\\Máy tính\\Download Video\\native-host\\host.exe",
+  "path": "C:\\Users\\hoang\\OneDrive\\Máy tính\\Download Video\\native-host\\host.bat",
   "type": "stdio",
   "allowed_origins": [
     "chrome-extension://amabnkaljgacfjocmlfkfpbbglijpfcn/"
