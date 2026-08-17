@@ -88,8 +88,25 @@ if not exist "node_modules" (
 )
 echo.
 
-:: === 3. Start server ===
-echo [3/4] Starting server (will auto-download tools if missing)...
+:: === 3. Setup Auto-Start (Native Messaging) ===
+echo [3/5] Setting up Server Auto-Start for Chrome...
+set "NATIVE_DIR=%ROOT%native-host"
+set "JSON_PATH=%NATIVE_DIR%\com.video_downloader.server.json"
+
+:: Update host.exe path in JSON
+powershell -Command "$json = Get-Content '%JSON_PATH%' | ConvertFrom-Json; $json.path = '%NATIVE_DIR%\host.exe'; $json | ConvertTo-Json -Depth 10 | Set-Content '%JSON_PATH%' -Encoding UTF8"
+
+:: Add Registry Key
+REG ADD "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.video_downloader.server" /ve /t REG_SZ /d "%JSON_PATH%" /f >nul
+if %errorlevel% equ 0 (
+    echo   [OK] Auto-Start registry added successfully.
+) else (
+    echo   [ERROR] Failed to add registry key.
+)
+echo.
+
+:: === 4. Start server ===
+echo [4/5] Starting server (will auto-download tools if missing)...
 echo.
 
 start "" "%NODE_EXE%" "%SERVER%\index.js"
@@ -113,8 +130,8 @@ echo   [WARNING] Server not responding yet, it might be downloading FFmpeg...
 :done
 echo.
 
-:: === 4. Instructions ===
-echo [4/4] Chrome Extension Installation
+:: === 5. Instructions ===
+echo [5/5] Chrome Extension Installation
 echo.
 echo  ---------------------------------------------
 echo   1. Open Chrome, go to: chrome://extensions/
