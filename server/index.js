@@ -323,7 +323,7 @@ app.delete('/api/clear-completed', (req, res) => {
 app.get('/api/check-tools', async (req, res) => {
   try {
     const paths = resolveAllTools();
-    const toolsToCheck = ['ffmpeg', 'ffprobe', 'yt-dlp', 'deno'];
+    const toolsToCheck = ['ffmpeg', 'ffprobe', 'yt-dlp'];
     const results = [];
 
     for (const name of toolsToCheck) {
@@ -332,18 +332,9 @@ app.get('/api/check-tools', async (req, res) => {
       let toolPath = paths[name] || null;
 
       try {
-        if (!toolPath && name === 'deno') {
-          try {
-            const denoPath = execSync('where deno', { encoding: 'utf8', windowsHide: true }).split('\n')[0].trim();
-            if (denoPath) toolPath = denoPath;
-          } catch (e) {
-            // where command failed
-          }
-        }
-
-        if (toolPath || name === 'deno') {
+        if (toolPath) {
           const versionFlag = (name === 'ffmpeg' || name === 'ffprobe') ? '-version' : '--version';
-          const cmd = toolPath ? `"${toolPath}" ${versionFlag}` : `${name} ${versionFlag}`;
+          const cmd = `"${toolPath}" ${versionFlag}`;
           const output = execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
           installed = true;
           version = output.split('\n')[0].trim();

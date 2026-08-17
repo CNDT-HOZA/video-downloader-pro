@@ -90,19 +90,9 @@ echo.
 
 :: === 3. Setup Auto-Start (Native Messaging) ===
 echo [3/5] Setting up Server Auto-Start for Chrome...
-set "NATIVE_DIR=%ROOT%native-host"
-set "JSON_PATH=%NATIVE_DIR%\com.video_downloader.server.json"
 
-:: Update host.exe path in JSON
-powershell -Command "$json = Get-Content '%JSON_PATH%' | ConvertFrom-Json; $json.path = '%NATIVE_DIR%\host.exe'; $json | ConvertTo-Json -Depth 10 | Set-Content '%JSON_PATH%' -Encoding UTF8"
+"%NODE_EXE%" "%SERVER%\setup-registry.js"
 
-:: Add Registry Key
-REG ADD "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.video_downloader.server" /ve /t REG_SZ /d "%JSON_PATH%" /f >nul
-if %errorlevel% equ 0 (
-    echo   [OK] Auto-Start registry added successfully.
-) else (
-    echo   [ERROR] Failed to add registry key.
-)
 echo.
 
 :: === 4. Start server ===
