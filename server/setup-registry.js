@@ -5,7 +5,7 @@ const { execSync } = require('child_process');
 try {
   const nativeDir = path.join(__dirname, '..', 'native-host');
   const jsonPath = path.join(nativeDir, 'com.video_downloader.server.json');
-  const hostExePath = path.join(nativeDir, 'host.bat');
+  const hostExePath = path.join(nativeDir, 'host.exe');
 
   // Đọc file JSON (UTF-8)
   const data = fs.readFileSync(jsonPath, 'utf8');
