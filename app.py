@@ -27,7 +27,7 @@ from tkinter import filedialog
 import customtkinter as ctk
 import yt_dlp
 
-APP_VERSION = "2.4.4"
+APP_VERSION = "2.4.5"
 
 try:
     if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -638,10 +638,7 @@ def parse_available_formats(info):
             label = f"{label} [#{fmt_id}]"
         seen_labels[label] = True
 
-        if has_ffmpeg():
-            format_spec = f"{fmt_id}+bestaudio/{fmt_id}/best" if fmt_id else "bestvideo+bestaudio/best"
-        else:
-            format_spec = f"{fmt_id}/best" if fmt_id else "best"
+        format_spec = f"{fmt_id}+bestaudio/{fmt_id}/best" if fmt_id else "bestvideo+bestaudio/best"
         result.append((label, format_spec))
 
     return result
@@ -2358,6 +2355,37 @@ class VideoDownloaderApp(ctk.CTk):
         self._log("⬇ Bắt đầu tải và cài đặt FFmpeg 7.1...")
         self._auto_install_ffmpeg()
 
+    def _ensure_ffmpeg_ready(self, task_name="tác vụ", card=None, timeout=300):
+        """Đảm bảo FFmpeg đã cài xong trước khi tải video/render. Không bao giờ hạ cấp chất lượng."""
+        if has_ffmpeg():
+            return True
+
+        if not self._installing_ffmpeg:
+            self._log(f"⏳ Thư viện FFmpeg cần thiết cho {task_name}. Đang tự động tải và kích hoạt...")
+            self._auto_install_ffmpeg()
+
+        if card:
+            card.set_status("⏳ Đang đợi cài FFmpeg...", "#f0c070")
+            card.set_detail("Đang chờ tải và kích hoạt thư viện FFmpeg 7.1 để xử lý chất lượng cao nhất...")
+
+        self._log(f"⏳ Đang chờ FFmpeg tải và cài đặt xong để thực hiện {task_name}...")
+
+        start_time = time.time()
+        while not has_ffmpeg():
+            if getattr(self, '_cancel_job', False):
+                return False
+            if not self._installing_ffmpeg and not has_ffmpeg():
+                self._auto_install_ffmpeg()
+            if time.time() - start_time > timeout:
+                self._log(f"❌ Quá thời gian chờ tải FFmpeg ({timeout}s).", level="error")
+                if card:
+                    card.set_failed("Không thể cài đặt FFmpeg, vui lòng kiểm tra kết nối mạng.")
+                return False
+            time.sleep(0.5)
+
+        self.after(0, self._refresh_ffmpeg_ui)
+        return True
+
     def _auto_install_ffmpeg(self):
         """Cài FFmpeg ở nền, không hỏi và không khoá nút."""
         if self._installing_ffmpeg or has_ffmpeg():
@@ -2809,6 +2837,9 @@ class VideoDownloaderApp(ctk.CTk):
             self._alert("Chế độ render", "Vui lòng chọn chế độ Render GPU hoặc CPU (không chọn 'Không chuyển mã').", "warning")
             return
 
+        if not self._ensure_ffmpeg_ready("render video"):
+            return
+
         enc_name = mode_cfg['encoder']
         is_gpu = enc_name in ('h264_nvenc', 'h264_mf', 'h264_amf', 'h264_qsv')
         mode_label = "GPU 🚀" if is_gpu else "CPU ⚙"
@@ -2915,6 +2946,11 @@ class VideoDownloaderApp(ctk.CTk):
     def _single_download_worker(self, task_id, url, quality, custom_fmt=None, card=None):
         if card is None:
             card = self._create_task_card(task_id, url, quality, custom_fmt=custom_fmt)
+
+        if not self._ensure_ffmpeg_ready("tải video", card=card):
+            with self._task_lock:
+                self._active_downloads_count = max(0, self._active_downloads_count - 1)
+            return
 
         is_mp3 = quality == MP3_LABEL
         ydl_opts = self._base_ydl_opts(quality, custom_fmt=custom_fmt, card=card)
@@ -3227,6 +3263,9 @@ class VideoDownloaderApp(ctk.CTk):
     def _download_engine(self, urls, quality, is_channel=False):
         total = len(urls)
         is_mp3 = quality == MP3_LABEL
+
+        if not self._ensure_ffmpeg_ready("tải hàng loạt"):
+            return
 
         os.makedirs(self.download_path, exist_ok=True)
         self.after(0, lambda: (self.pbar.grid(), self.pbar.set(0)))
