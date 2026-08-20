@@ -27,7 +27,7 @@ from tkinter import filedialog
 import customtkinter as ctk
 import yt_dlp
 
-APP_VERSION = "2.4.3"
+APP_VERSION = "2.4.4"
 
 try:
     if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -139,58 +139,69 @@ def refresh_ffmpeg():
 
 
 def install_ffmpeg(on_progress=None, should_cancel=None):
-    """Tải, xác minh SHA256, rồi giải nén ffmpeg.exe + ffprobe.exe.
-
-    Ném RuntimeError nếu checksum sai — file tải về bị xoá, không chạy gì cả.
-    """
+    """Tải, xác minh SHA256, rồi giải nén ffmpeg.exe + ffprobe.exe."""
     os.makedirs(FFMPEG_DIR, exist_ok=True)
     archive = os.path.join(FFMPEG_DIR, '_tai_ve.zip')
 
-    digest = hashlib.sha256()
-    req = urllib.request.Request(FFMPEG_URL, headers={'User-Agent': 'ProVideoDownloader'})
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp, open(archive, 'wb') as f:
-            total = int(resp.headers.get('Content-Length') or FFMPEG_ZIP_SIZE)
-            done = 0
-            while True:
-                if should_cancel and should_cancel():
-                    raise RuntimeError('Đã huỷ tải FFmpeg.')
-                chunk = resp.read(524288)
-                if not chunk:
-                    break
-                f.write(chunk)
-                digest.update(chunk)
-                done += len(chunk)
-                if on_progress:
-                    on_progress(done, total)
+    urls = [
+        (FFMPEG_URL, FFMPEG_SHA256),
+        ('https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip', None)
+    ]
 
-        actual = digest.hexdigest()
-        if actual != FFMPEG_SHA256:
-            raise RuntimeError(
-                "File tải về không khớp checksum — đã huỷ để đảm bảo an toàn.\n"
-                f"Mong đợi: {FFMPEG_SHA256[:16]}...\n"
-                f"Nhận được: {actual[:16]}..."
-            )
-
-        extracted = 0
-        with zipfile.ZipFile(archive) as zf:
-            for info in zf.infolist():
-                name = os.path.basename(info.filename)
-                if name.lower() in FFMPEG_WANTED:
-                    info.filename = name          # phẳng hoá, bỏ thư mục con trong zip
-                    zf.extract(info, FFMPEG_DIR)
-                    extracted += 1
-        if not extracted:
-            raise RuntimeError('Không tìm thấy ffmpeg.exe trong file tải về.')
-    finally:
+    last_error = None
+    for download_url, expected_sha in urls:
         try:
-            if os.path.exists(archive):
-                os.remove(archive)
-        except OSError:
-            pass
+            digest = hashlib.sha256()
+            req = urllib.request.Request(download_url, headers={'User-Agent': 'ProVideoDownloader'})
+            with urllib.request.urlopen(req, timeout=90) as resp, open(archive, 'wb') as f:
+                total = int(resp.headers.get('Content-Length') or FFMPEG_ZIP_SIZE)
+                done = 0
+                while True:
+                    if should_cancel and should_cancel():
+                        raise RuntimeError('Đã huỷ tải FFmpeg.')
+                    chunk = resp.read(1048576)   # 1MB chunks
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    if expected_sha:
+                        digest.update(chunk)
+                    done += len(chunk)
+                    if on_progress:
+                        on_progress(done, total)
+
+            if expected_sha:
+                actual = digest.hexdigest()
+                if actual != expected_sha:
+                    raise RuntimeError(
+                        "File tải về không khớp checksum — đã huỷ để đảm bảo an toàn.\n"
+                        f"Mong đợi: {expected_sha[:16]}...\n"
+                        f"Nhận được: {actual[:16]}..."
+                    )
+
+            extracted = 0
+            with zipfile.ZipFile(archive) as zf:
+                for info in zf.infolist():
+                    name = os.path.basename(info.filename)
+                    if name.lower() in FFMPEG_WANTED:
+                        info.filename = name          # phẳng hoá, bỏ thư mục con trong zip
+                        zf.extract(info, FFMPEG_DIR)
+                        extracted += 1
+            if not extracted:
+                raise RuntimeError('Không tìm thấy ffmpeg.exe trong file tải về.')
+
+            if refresh_ffmpeg():
+                return _ffmpeg_path
+        except Exception as e:
+            last_error = e
+        finally:
+            try:
+                if os.path.exists(archive):
+                    os.remove(archive)
+            except OSError:
+                pass
 
     if not refresh_ffmpeg():
-        raise RuntimeError('Đã giải nén nhưng vẫn không thấy ffmpeg.exe.')
+        raise RuntimeError(f'Cài đặt FFmpeg thất bại: {last_error or "Không tìm thấy file"}')
     return _ffmpeg_path
 
 
@@ -627,7 +638,10 @@ def parse_available_formats(info):
             label = f"{label} [#{fmt_id}]"
         seen_labels[label] = True
 
-        format_spec = f"{fmt_id}+bestaudio/{fmt_id}/best" if fmt_id else "bestvideo+bestaudio/best"
+        if has_ffmpeg():
+            format_spec = f"{fmt_id}+bestaudio/{fmt_id}/best" if fmt_id else "bestvideo+bestaudio/best"
+        else:
+            format_spec = f"{fmt_id}/best" if fmt_id else "best"
         result.append((label, format_spec))
 
     return result
@@ -2294,15 +2308,31 @@ class VideoDownloaderApp(ctk.CTk):
     def _confirm(self, title, message):
         return self._show_dialog(title, message, kind="warning", buttons=("Không", "Có")) == "Có"
 
-    # ───── FFmpeg ─────
-
     def _refresh_ffmpeg_ui(self):
         """Đồng bộ giao diện với tình trạng FFmpeg hiện tại."""
         ready = has_ffmpeg()
-        self.subtitle.configure(
-            text=f"v{APP_VERSION}" + ("" if ready else "  •  chưa có FFmpeg"),
-            text_color="#55efc4" if ready else "#f0c070",
-        )
+        if ready:
+            self.subtitle.configure(
+                text=f"v{APP_VERSION}  •  FFmpeg 7.1 sẵn sàng",
+                text_color="#55efc4",
+                cursor=""
+            )
+            self.subtitle.unbind("<Button-1>")
+        else:
+            if self._installing_ffmpeg:
+                self.subtitle.configure(
+                    text=f"v{APP_VERSION}  •  đang tải FFmpeg...",
+                    text_color="#f0c070",
+                    cursor=""
+                )
+            else:
+                self.subtitle.configure(
+                    text=f"v{APP_VERSION}  •  chưa có FFmpeg (Bấm để tải)",
+                    text_color="#ff7675",
+                    cursor="hand2"
+                )
+                self.subtitle.bind("<Button-1>", lambda e: self._manual_install_ffmpeg())
+
         # Bảng chất lượng đổi khi FFmpeg xuất hiện, menu phải đổi theo.
         values = list(format_map().keys())
         for menu in self._quality_menus:
@@ -2318,13 +2348,22 @@ class VideoDownloaderApp(ctk.CTk):
             m.configure(values=t_options)
             m.set(selected)
 
-    def _auto_install_ffmpeg(self):
-        """Cài FFmpeg ở nền, không hỏi và không khoá nút.
+    def _manual_install_ffmpeg(self):
+        if has_ffmpeg():
+            self._alert("FFmpeg", "Thư viện FFmpeg đã sẵn sàng!", "info")
+            return
+        if self._installing_ffmpeg:
+            self._alert("FFmpeg", "FFmpeg đang được tự động tải ở chế độ ngầm. Vui lòng chờ trong giây lát...", "info")
+            return
+        self._log("⬇ Bắt đầu tải và cài đặt FFmpeg 7.1...")
+        self._auto_install_ffmpeg()
 
-        Cố tình KHÔNG dùng self._busy: người dùng vẫn tải video được ngay
-        (ở chất lượng gộp sẵn) trong lúc FFmpeg đang tải về.
-        """
+    def _auto_install_ffmpeg(self):
+        """Cài FFmpeg ở nền, không hỏi và không khoá nút."""
+        if self._installing_ffmpeg or has_ffmpeg():
+            return
         self._installing_ffmpeg = True
+        self._refresh_ffmpeg_ui()
         threading.Thread(target=self._ffmpeg_worker, daemon=True).start()
 
     def _ffmpeg_status(self, text, color="#f0c070"):
@@ -2352,6 +2391,10 @@ class VideoDownloaderApp(ctk.CTk):
             pct = (done / total * 100) if total else 0
             self.after(0, self._ffmpeg_status,
                        f"Đang tự cài FFmpeg ở nền: {mb:.0f}/{mb_total:.0f} MB ({pct:.0f}%)")
+            self.after(0, lambda p=pct: self.subtitle.configure(
+                text=f"v{APP_VERSION}  •  đang tải FFmpeg ({p:.0f}%)",
+                text_color="#f0c070"
+            ))
 
         try:
             self.after(0, self._ffmpeg_status, "Đang tự cài FFmpeg ở nền...")
@@ -2364,8 +2407,10 @@ class VideoDownloaderApp(ctk.CTk):
         self._installing_ffmpeg = False
         self._refresh_ffmpeg_ui()
         if error:
+            self._log(f"❌ Không thể cài đặt FFmpeg: {error}", level="error")
             self._ffmpeg_status(f"Không cài được FFmpeg: {str(error)[:60]}", "#ff7675")
         else:
+            self._log("✅ Đã cài đặt xong FFmpeg 7.1 — hệ thống sẵn sàng ghép video 4K/MP3 và Render.")
             self._ffmpeg_status("✅ Đã cài xong FFmpeg — giờ tải được 4K và MP3.", "#00d084")
 
     def _start_auto_update_libraries(self):
@@ -3028,6 +3073,10 @@ class VideoDownloaderApp(ctk.CTk):
     def _base_ydl_opts(self, quality, custom_fmt=None, card=None):
         is_mp3 = quality == MP3_LABEL
         format_spec = custom_fmt or getattr(self, '_custom_format_map', {}).get(quality) or format_map().get(quality, "bestvideo+bestaudio/best")
+        
+        if not has_ffmpeg():
+            if '+' in format_spec:
+                format_spec = format_spec.split('+')[0] + "/best"
         
         hooks = [self._hook]
         if card:
