@@ -282,7 +282,10 @@ def apply_update_and_restart(new_exe_path):
 
     bat_content = f"""@echo off
 chcp 65001 > nul
-echo Dang cho ung dung dong de cap nhat...
+cd /d "{exe_dir}"
+set "_MEIPASS2="
+set "_MEIPASS="
+echo Đang chờ ứng dụng đóng để hoàn tất cập nhật...
 timeout /t 1 /nobreak > nul
 
 :wait_loop
@@ -292,7 +295,7 @@ if not errorlevel 1 (
     goto wait_loop
 )
 
-timeout /t 1 /nobreak > nul
+timeout /t 2 /nobreak > nul
 move /y "{new_exe_path}" "{current_exe}" > nul
 
 if errorlevel 1 (
@@ -300,6 +303,9 @@ if errorlevel 1 (
     del /f /q "{new_exe_path}" > nul
 )
 
+cd /d "{exe_dir}"
+set "_MEIPASS2="
+set "_MEIPASS="
 start "" "{current_exe}"
 del "%~f0" & exit
 """
@@ -308,8 +314,14 @@ del "%~f0" & exit
         with open(bat_path, "w", encoding="utf-8") as f:
             f.write(bat_content)
 
+        env = dict(os.environ)
+        env.pop('_MEIPASS2', None)
+        env.pop('_MEIPASS', None)
+
         subprocess.Popen(
             ["cmd.exe", "/c", bat_path],
+            cwd=exe_dir,
+            env=env,
             creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0) | getattr(subprocess, 'CREATE_NO_WINDOW', 0)
         )
         os._exit(0)
