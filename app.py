@@ -27,7 +27,7 @@ from tkinter import filedialog
 import customtkinter as ctk
 import yt_dlp
 
-APP_VERSION = "2.4.1"
+APP_VERSION = "2.4.2"
 
 try:
     if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -293,8 +293,23 @@ def download_app_update(download_url, target_path, on_progress=None):
         return False
 
 
+def cleanup_old_updates():
+    """Dọn dẹp các file .old hoặc .tmp còn sót lại sau khi cập nhật."""
+    try:
+        if getattr(sys, 'frozen', False):
+            exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+            for fn in os.listdir(exe_dir):
+                if fn.endswith('.old') or fn == 'app_update.tmp' or fn == 'updater.ps1':
+                    try:
+                        os.remove(os.path.join(exe_dir, fn))
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+
 def apply_update_and_restart(new_exe_path):
-    """Áp dụng bản cập nhật: tạo updater.ps1 đợi app đóng rồi đè file EXE và khởi động lại."""
+    """Áp dụng bản cập nhật: tạo updater.ps1 với Atomic Rename để đè file EXE và khởi động lại."""
     if not getattr(sys, 'frozen', False):
         safe_print(f"[AutoUpdate] Dang chay ma nguon, file moi da luu tai: {new_exe_path}")
         return
@@ -304,8 +319,8 @@ def apply_update_and_restart(new_exe_path):
     ps1_path = os.path.join(exe_dir, "updater.ps1")
     pid = os.getpid()
 
-    # Tạo script PowerShell an toàn 100% với UTF-8-SIG (hỗ trợ đường dẫn có dấu tiếng Việt như Máy tính)
-    ps_content = f"""# PowerShell Auto-Updater for Pro Video Downloader
+    # Script PowerShell áp dụng kỹ thuật Atomic Rename (Rename file đang chạy -> di chuyển file mới -> chạy bản mới)
+    ps_content = f"""# PowerShell Auto-Updater with Atomic Rename
 $targetPid = {pid}
 $currentExe = @'
 {current_exe}
@@ -316,31 +331,33 @@ $newExe = @'
 $exeDir = @'
 {exe_dir}
 '@
+$oldExe = "$currentExe.old"
 
-# 1. Chờ tiến trình PID đóng hẳn
-for ($i = 0; $i -lt 30; $i++) {{
-    $proc = Get-Process -Id $targetPid -ErrorAction SilentlyContinue
-    if (-not $proc) {{ break }}
-    Start-Sleep -Milliseconds 200
-}}
-Stop-Process -Id $targetPid -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 500
+# 1. Đóng mọi tiến trình Pro_VideoDownloader đang chạy
+try {{
+    Stop-Process -Id $targetPid -Force -ErrorAction SilentlyContinue
+}} catch {{}}
+try {{
+    Get-Process -Name "Pro_VideoDownloader*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+}} catch {{}}
+Start-Sleep -Milliseconds 400
 
-# 2. Vòng lặp thay thế file đến khi file mới ghi đè thành công
-for ($i = 0; $i -lt 50; $i++) {{
-    if (-not (Test-Path -LiteralPath $newExe)) {{ break }}
-    try {{
-        Remove-Item -LiteralPath $currentExe -Force -ErrorAction SilentlyContinue
-        Move-Item -LiteralPath $newExe -Destination $currentExe -Force -ErrorAction Stop
-        break
-    }} catch {{
-        try {{
-            Copy-Item -LiteralPath $newExe -Destination $currentExe -Force -ErrorAction Stop
-            Remove-Item -LiteralPath $newExe -Force -ErrorAction SilentlyContinue
-            break
-        }} catch {{
-            Start-Sleep -Milliseconds 300
-        }}
+# 2. Áp dụng kỹ thuật Atomic Rename: Đổi tên file cũ sang .old rồi đưa file mới vào
+if (Test-Path -LiteralPath $newExe) {{
+    if (Test-Path -LiteralPath $oldExe) {{
+        Remove-Item -LiteralPath $oldExe -Force -ErrorAction SilentlyContinue
+    }}
+    
+    # Đổi tên file đang chạy sang .old (Windows cho phép rename file đang mở/lock)
+    if (Test-Path -LiteralPath $currentExe) {{
+        Rename-Item -LiteralPath $currentExe -NewName ([System.IO.Path]::GetFileName($oldExe)) -Force -ErrorAction SilentlyContinue
+    }}
+
+    # Đưa file mới vào đúng đường dẫn chính thức
+    Move-Item -LiteralPath $newExe -Destination $currentExe -Force -ErrorAction SilentlyContinue
+    
+    if (-not (Test-Path -LiteralPath $currentExe)) {{
+        Copy-Item -LiteralPath $newExe -Destination $currentExe -Force -ErrorAction SilentlyContinue
     }}
 }}
 
@@ -350,8 +367,9 @@ for ($i = 0; $i -lt 50; $i++) {{
 Remove-Item env:_MEIPASS2 -ErrorAction SilentlyContinue
 Remove-Item env:_MEIPASS -ErrorAction SilentlyContinue
 
-# 4. Khởi động bản mới hoàn toàn độc lập và xoá script cập nhật
+# 4. Khởi động bản mới hoàn toàn độc lập
 if (Test-Path -LiteralPath $currentExe) {{
+    Start-Sleep -Milliseconds 300
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $currentExe
     $psi.WorkingDirectory = $exeDir
@@ -359,6 +377,10 @@ if (Test-Path -LiteralPath $currentExe) {{
     [System.Diagnostics.Process]::Start($psi)
 }}
 
+# 5. Dọn dẹp
+Start-Sleep -Seconds 1
+Remove-Item -LiteralPath $oldExe -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $newExe -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
 """
 
@@ -1801,6 +1823,7 @@ class VideoDownloaderApp(ctk.CTk):
 
     def __init__(self):
         super().__init__()
+        cleanup_old_updates()
         self.title("⚡ Pro Video Downloader")
         self.geometry("660x820")
         self.minsize(600, 700)
