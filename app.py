@@ -5,6 +5,7 @@ danh sách donor, biểu đồ thống kê, chữ chạy, lịch sử, tải thu
 clipboard nền.
 """
 
+import base64
 import concurrent.futures
 import hashlib
 import os
@@ -201,6 +202,7 @@ refresh_ffmpeg()
 # Tự động kiểm tra & cập nhật ứng dụng & thư viện (yt-dlp, FFmpeg,...)
 # ─────────────────────────────────────────────────────────────
 
+GITHUB_API_VERSION_URL = "https://api.github.com/repos/CNDT-HOZA/video-downloader-pro/contents/version.json?ref=App"
 APP_UPDATE_URL = "https://raw.githubusercontent.com/CNDT-HOZA/video-downloader-pro/App/version.json"
 
 
@@ -223,12 +225,34 @@ def parse_version_tuple(v_str):
 
 
 def check_latest_app_version(url=None):
-    """Kiểm tra phiên bản ứng dụng mới nhất từ Git repository."""
-    target_url = url or APP_UPDATE_URL
+    """Kiểm tra phiên bản ứng dụng mới nhất từ Git repository (dùng GitHub API để realtime không bị cache)."""
+    # 1. Thử qua GitHub API (luôn cập nhật tức thì, không bị Fastly CDN cache đệm)
+    if not url:
+        try:
+            req = urllib.request.Request(
+                GITHUB_API_VERSION_URL,
+                headers={
+                    'User-Agent': UA or 'ProVideoDownloader',
+                    'Accept': 'application/vnd.github.v3+json'
+                }
+            )
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                raw_json = base64.b64decode(data.get('content', '')).decode('utf-8')
+                return json.loads(raw_json)
+        except Exception:
+            pass
+
+    # 2. Fallback sang raw URL nếu GitHub API bị chặn/rate-limit
+    target_url = url or f"{APP_UPDATE_URL}?t={int(time.time())}"
     try:
         req = urllib.request.Request(
             target_url,
-            headers={'User-Agent': UA or 'ProVideoDownloader'}
+            headers={
+                'User-Agent': UA or 'ProVideoDownloader',
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache'
+            }
         )
         with urllib.request.urlopen(req, timeout=8) as resp:
             return json.loads(resp.read().decode('utf-8'))
@@ -283,8 +307,8 @@ def apply_update_and_restart(new_exe_path):
     bat_content = f"""@echo off
 chcp 65001 > nul
 cd /d "{exe_dir}"
-set "_MEIPASS2="
-set "_MEIPASS="
+set _MEIPASS2=
+set _MEIPASS=
 echo Đang chờ ứng dụng đóng để hoàn tất cập nhật...
 timeout /t 1 /nobreak > nul
 
@@ -313,8 +337,8 @@ if not exist "{current_exe}" (
 )
 
 cd /d "{exe_dir}"
-set "_MEIPASS2="
-set "_MEIPASS="
+set _MEIPASS2=
+set _MEIPASS=
 timeout /t 1 /nobreak > nul
 start "" /D "{exe_dir}" "{current_exe}"
 del "%~f0" & exit
