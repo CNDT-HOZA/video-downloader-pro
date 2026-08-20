@@ -27,7 +27,7 @@ from tkinter import filedialog
 import customtkinter as ctk
 import yt_dlp
 
-APP_VERSION = "2.3.9"
+APP_VERSION = "2.4.0"
 
 try:
     if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -355,7 +355,7 @@ if (Test-Path -LiteralPath $currentExe) {{
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $currentExe
     $psi.WorkingDirectory = $exeDir
-    $psi.UseShellExecute = $false
+    $psi.UseShellExecute = $true
     [System.Diagnostics.Process]::Start($psi)
 }}
 
