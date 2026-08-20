@@ -27,7 +27,7 @@ from tkinter import filedialog
 import customtkinter as ctk
 import yt_dlp
 
-APP_VERSION = "2.3.3"
+APP_VERSION = "2.3.4"
 
 try:
     if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -309,37 +309,41 @@ chcp 65001 > nul
 cd /d "{exe_dir}"
 set _MEIPASS2=
 set _MEIPASS=
-echo Đang chờ ứng dụng đóng để hoàn tất cập nhật...
-timeout /t 1 /nobreak > nul
+echo Đang đóng ứng dụng cũ và chuẩn bị cập nhật...
 
+:: 1. Chờ tiến trình PID {pid} đóng hoàn toàn
 :wait_loop
 tasklist /fi "PID eq {pid}" 2>nul | findstr /i "{pid}" > nul
 if not errorlevel 1 (
-    timeout /t 1 /nobreak > nul
+    ping 127.0.0.1 -n 2 > nul
     goto wait_loop
 )
 
-timeout /t 2 /nobreak > nul
+:: 2. Đảm bảo đóng hết mọi tiến trình phụ nếu còn
+taskkill /F /PID {pid} >nul 2>&1
+ping 127.0.0.1 -n 3 > nul
 
+:: 3. Vòng lặp thay thế file: chỉ dừng lại khi new_exe_path đã được di chuyển thành công vào current_exe
 :retry_replace
-del /f /q "{current_exe}" 2>nul
-move /y "{new_exe_path}" "{current_exe}" > nul
-if errorlevel 1 (
-    copy /y "{new_exe_path}" "{current_exe}" > nul
+del /f /q "{current_exe}" >nul 2>&1
+move /y "{new_exe_path}" "{current_exe}" > nul 2>&1
+if exist "{new_exe_path}" (
+    copy /y "{new_exe_path}" "{current_exe}" > nul 2>&1
     if not errorlevel 1 (
-        del /f /q "{new_exe_path}" 2>nul
+        del /f /q "{new_exe_path}" >nul 2>&1
     )
 )
 
-if not exist "{current_exe}" (
-    timeout /t 1 /nobreak > nul
+if exist "{new_exe_path}" (
+    ping 127.0.0.1 -n 2 > nul
     goto retry_replace
 )
 
+:: 4. Khởi động bản mới hoàn toàn độc lập
 cd /d "{exe_dir}"
 set _MEIPASS2=
 set _MEIPASS=
-timeout /t 1 /nobreak > nul
+ping 127.0.0.1 -n 2 > nul
 start "" /D "{exe_dir}" "{current_exe}"
 del "%~f0" & exit
 """
