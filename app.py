@@ -27,7 +27,7 @@ from tkinter import filedialog
 import customtkinter as ctk
 import yt_dlp
 
-APP_VERSION = "2.3.1"
+APP_VERSION = "2.3.2"
 
 try:
     if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
