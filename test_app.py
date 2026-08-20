@@ -429,6 +429,24 @@ class TestLibraryUpdate(unittest.TestCase):
         self.assertTrue(v_new > v_old)
         self.assertFalse(v_old > v_new)
 
+class TestAppAutoUpdate(unittest.TestCase):
+    def test_parse_version_tuple_semantic(self):
+        self.assertEqual(app.parse_version_tuple("2.2.0"), (2, 2, 0))
+        self.assertEqual(app.parse_version_tuple("v2.2.1"), (2, 2, 1))
+        self.assertTrue(app.parse_version_tuple("2.2.1") > app.parse_version_tuple("2.2.0"))
+        self.assertTrue(app.parse_version_tuple("3.0.0") > app.parse_version_tuple("2.9.9"))
+        self.assertFalse(app.parse_version_tuple("2.2.0") > app.parse_version_tuple("2.2.0"))
+
+    def test_app_update_url_defined(self):
+        self.assertTrue(hasattr(app, 'APP_UPDATE_URL'))
+        self.assertIn("version.json", app.APP_UPDATE_URL)
+        self.assertIn("CNDT-HOZA/video-downloader-pro", app.APP_UPDATE_URL)
+
+    def test_app_version_defined(self):
+        self.assertTrue(hasattr(app, 'APP_VERSION'))
+        self.assertTrue(len(app.APP_VERSION) > 0)
+
+
 class TestTaskCard(unittest.TestCase):
     def test_task_card_class_attributes(self):
         self.assertTrue(hasattr(app, 'TaskCard'))
@@ -441,3 +459,4 @@ class TestTaskCard(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
+

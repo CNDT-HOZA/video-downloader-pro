@@ -197,11 +197,15 @@ refresh_ffmpeg()
 
 
 # ─────────────────────────────────────────────────────────────
-# Tự động kiểm tra & cập nhật thư viện (yt-dlp, FFmpeg,...)
+# ─────────────────────────────────────────────────────────────
+# Tự động kiểm tra & cập nhật ứng dụng & thư viện (yt-dlp, FFmpeg,...)
 # ─────────────────────────────────────────────────────────────
 
+APP_UPDATE_URL = "https://raw.githubusercontent.com/CNDT-HOZA/video-downloader-pro/App/version.json"
+
+
 def parse_version_tuple(v_str):
-    """Chuyển chuỗi phiên bản dạng '2026.08.18' hoặc '2026.7.4' thành tuple số để so sánh."""
+    """Chuyển chuỗi phiên bản dạng '2026.08.18' hoặc '2.2.0' thành tuple số để so sánh."""
     if not v_str:
         return ()
     clean = re.sub(r'^[^\d]*', '', str(v_str).strip())
@@ -216,6 +220,101 @@ def parse_version_tuple(v_str):
         if num:
             parts.append(int(num))
     return tuple(parts)
+
+
+def check_latest_app_version(url=None):
+    """Kiểm tra phiên bản ứng dụng mới nhất từ Git repository."""
+    target_url = url or APP_UPDATE_URL
+    try:
+        req = urllib.request.Request(
+            target_url,
+            headers={'User-Agent': UA or 'ProVideoDownloader'}
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            return json.loads(resp.read().decode('utf-8'))
+    except Exception as e:
+        safe_print(f"[AutoUpdate] Khong the lay thong tin cap nhat app: {e}")
+        return None
+
+
+def download_app_update(download_url, target_path, on_progress=None):
+    """Tải file cập nhật ứng dụng từ Git về target_path kèm báo tiến độ."""
+    try:
+        req = urllib.request.Request(
+            download_url,
+            headers={'User-Agent': UA or 'ProVideoDownloader'}
+        )
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            total_size = int(resp.headers.get('Content-Length') or 0)
+            downloaded = 0
+            chunk_size = 64 * 1024
+            with open(target_path, 'wb') as f:
+                while True:
+                    chunk = resp.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if on_progress:
+                        pct = (downloaded / total_size * 100.0) if total_size > 0 else 0.0
+                        on_progress(downloaded, total_size, pct)
+        return True
+    except Exception as e:
+        safe_print(f"[AutoUpdate] Loi khi tai ban cap nhat: {e}")
+        if os.path.exists(target_path):
+            try:
+                os.remove(target_path)
+            except Exception:
+                pass
+        return False
+
+
+def apply_update_and_restart(new_exe_path):
+    """Áp dụng bản cập nhật: tạo updater.bat đợi app đóng rồi đè file EXE và khởi động lại."""
+    if not getattr(sys, 'frozen', False):
+        safe_print(f"[AutoUpdate] Dang chay ma nguon, file moi da luu tai: {new_exe_path}")
+        return
+
+    current_exe = os.path.abspath(sys.executable)
+    exe_dir = os.path.dirname(current_exe)
+    bat_path = os.path.join(exe_dir, "updater.bat")
+    pid = os.getpid()
+
+    bat_content = f"""@echo off
+chcp 65001 > nul
+echo Dang cho ung dung dong de cap nhat...
+timeout /t 1 /nobreak > nul
+
+:wait_loop
+tasklist /fi "PID eq {pid}" 2>nul | findstr /i "{pid}" > nul
+if not errorlevel 1 (
+    timeout /t 1 /nobreak > nul
+    goto wait_loop
+)
+
+timeout /t 1 /nobreak > nul
+move /y "{new_exe_path}" "{current_exe}" > nul
+
+if errorlevel 1 (
+    copy /y "{new_exe_path}" "{current_exe}" > nul
+    del /f /q "{new_exe_path}" > nul
+)
+
+start "" "{current_exe}"
+del "%~f0" & exit
+"""
+
+    try:
+        with open(bat_path, "w", encoding="utf-8") as f:
+            f.write(bat_content)
+
+        subprocess.Popen(
+            ["cmd.exe", "/c", bat_path],
+            creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0) | getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+        )
+        os._exit(0)
+    except Exception as e:
+        safe_print(f"[AutoUpdate] Khong the khoi chay updater.bat: {e}")
 
 
 def check_latest_ytdlp_version():
@@ -1839,6 +1938,15 @@ class VideoDownloaderApp(ctk.CTk):
         self.subtitle = ctk.CTkLabel(titles, text="", font=ctk.CTkFont(family=self.FONT, size=9))
         self.subtitle.pack(anchor="w")
 
+        # Nút kiểm tra cập nhật trên header
+        self.btn_check_update = ctk.CTkButton(
+            header, text="🔄 Kiểm tra cập nhật", width=125, height=26,
+            font=ctk.CTkFont(family=self.FONT, size=10, weight="bold"),
+            fg_color="#2c3e50", hover_color="#34495e", corner_radius=6,
+            command=lambda: self._check_app_update(manual=True)
+        )
+        self.btn_check_update.pack(side="right", padx=(0, 16), pady=6)
+
     def _build_tabs(self):
         self.tabview = ctk.CTkTabview(
             self, corner_radius=14,
@@ -2165,11 +2273,97 @@ class VideoDownloaderApp(ctk.CTk):
             self._ffmpeg_status("✅ Đã cài xong FFmpeg — giờ tải được 4K và MP3.", "#00d084")
 
     def _start_auto_update_libraries(self):
-        """Khởi chạy tiến trình kiểm tra và cập nhật thư viện ngầm khi bật app."""
+        """Khởi chạy tiến trình kiểm tra và cập nhật ứng dụng + thư viện ngầm khi bật app."""
         threading.Thread(target=self._update_libraries_worker, daemon=True).start()
 
+    def _check_app_update(self, manual=False):
+        """Khởi chạy kiểm tra cập nhật ứng dụng từ Git."""
+        threading.Thread(target=self._check_app_update_worker, args=(manual,), daemon=True).start()
+
+    def _check_app_update_worker(self, manual=False):
+        try:
+            if manual:
+                self._log("🔍 Đang kiểm tra bản cập nhật mới của ứng dụng trên GitHub...")
+            info = check_latest_app_version()
+            if not info:
+                if manual:
+                    self.after(0, self._alert, "Kiểm tra cập nhật",
+                               "Không thể kết nối tới máy chủ cập nhật GitHub.\nVui lòng kiểm tra lại kết nối mạng.", "warning")
+                return
+
+            remote_ver = str(info.get('version') or '').strip()
+            download_url = str(info.get('download_url') or '').strip()
+            changelog = str(info.get('changelog') or '').strip()
+
+            curr_tuple = parse_version_tuple(APP_VERSION)
+            remote_tuple = parse_version_tuple(remote_ver)
+
+            if remote_tuple > curr_tuple and download_url:
+                self._log(f"🚀 Phát hiện phiên bản mới: v{APP_VERSION} ➔ v{remote_ver}!")
+                msg = f"Đã có phiên bản mới v{remote_ver}!\n\n"
+                if changelog:
+                    msg += f"Nội dung cập nhật:\n{changelog}\n\n"
+                msg += "Bạn có muốn tải xuống và tự động cập nhật ngay không?"
+
+                def prompt_update():
+                    choice = self._show_dialog(
+                        "Cập nhật ứng dụng",
+                        msg,
+                        kind="info",
+                        buttons=("Để sau", "Cập nhật ngay")
+                    )
+                    if choice == "Cập nhật ngay":
+                        threading.Thread(target=self._perform_app_update, args=(download_url, remote_ver), daemon=True).start()
+
+                self.after(0, prompt_update)
+            else:
+                if manual:
+                    self.after(0, self._alert, "Cập nhật ứng dụng",
+                               f"Bạn đang sử dụng phiên bản mới nhất (v{APP_VERSION}).", "info")
+                else:
+                    self._log(f"✅ Ứng dụng đang ở phiên bản mới nhất (v{APP_VERSION}).")
+        except Exception as e:
+            if manual:
+                self.after(0, self._alert, "Lỗi kiểm tra cập nhật", f"Không thể kiểm tra cập nhật: {e}", "warning")
+            else:
+                self._log(f"ℹ Kiểm tra cập nhật ứng dụng: {e}")
+
+    def _perform_app_update(self, download_url, remote_ver):
+        self._log(f"⬇ Đang tải bản cập nhật v{remote_ver} từ GitHub...")
+        self.after(0, lambda: self.status.configure(
+            text=f"⬇ Đang tải bản cập nhật v{remote_ver}...", text_color="#f0c070"
+        ))
+
+        if getattr(sys, 'frozen', False):
+            exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+            target_path = os.path.join(exe_dir, "app_update.tmp")
+        else:
+            target_path = os.path.join(DATA_DIR, "app_update.tmp")
+
+        def on_prog(downloaded, total, pct):
+            pct_str = f"{pct:.1f}%" if total > 0 else f"{downloaded / (1024*1024):.1f} MB"
+            self.after(0, lambda p=pct_str: self.status.configure(
+                text=f"⬇ Đang tải bản cập nhật v{remote_ver} ({p})...", text_color="#f0c070"
+            ))
+
+        success = download_app_update(download_url, target_path, on_progress=on_prog)
+        if success and os.path.isfile(target_path) and os.path.getsize(target_path) > 1024:
+            self._log(f"✅ Đã tải xong bản cập nhật v{remote_ver}. Đang khởi động lại ứng dụng để nâng cấp...")
+            self.after(0, lambda: self.status.configure(
+                text="✅ Đã tải xong. Đang khởi động lại...", text_color="#55efc4"
+            ))
+            time.sleep(1)
+            apply_update_and_restart(target_path)
+        else:
+            self._log("❌ Không thể tải bản cập nhật từ GitHub.", level="error")
+            self.after(0, self._alert, "Cập nhật thất bại",
+                       "Không thể tải bản cập nhật từ Git. Vui lòng thử lại sau.", "warning")
+
     def _update_libraries_worker(self):
-        self._log("🔍 Đang kiểm tra cập nhật các thư viện (yt-dlp, FFmpeg)...")
+        self._log("🔍 Đang kiểm tra cập nhật ứng dụng và các thư viện...")
+
+        # 0. Kiểm tra cập nhật ứng dụng chính
+        self._check_app_update(manual=False)
 
         # 1. Kiểm tra FFmpeg
         if not has_ffmpeg():

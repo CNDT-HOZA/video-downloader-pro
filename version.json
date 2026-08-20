@@ -1,0 +1,7 @@
+{
+  "version": "2.2.0",
+  "name": "Pro Video Downloader HoangDuc v2.2.0",
+  "release_date": "2026-08-20",
+  "download_url": "https://raw.githubusercontent.com/CNDT-HOZA/video-downloader-pro/App/dist/Pro_VideoDownloader_HoangDuc.exe",
+  "changelog": "• Giao diện Task Card tiến trình độc lập theo luồng\n• Tự động quét và xoay vòng Proxy HTTPS vượt Bot-check YouTube\n• Tự động kiểm tra và nâng cấp ứng dụng từ Git\n• Tối ưu chuyển mã Render FFmpeg GPU (NVENC/MediaFoundation) & CPU"
+}

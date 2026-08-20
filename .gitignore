@@ -1,6 +1,7 @@
 # Build output
 build/
-dist/
+dist/*
+!dist/Pro_VideoDownloader_HoangDuc.exe
 
 # Environment
 .env
