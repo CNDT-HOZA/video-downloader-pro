@@ -1,6 +1,6 @@
 {
-  "version": "2.4.2",
-  "name": "Pro Video Downloader v2.4.2",
+  "version": "2.4.3",
+  "name": "Pro Video Downloader v2.4.3",
   "release_date": "2026-08-20",
   "download_url": "https://raw.githubusercontent.com/CNDT-HOZA/video-downloader-pro/App/dist/Pro_VideoDownloader.exe",
   "changelog": "• Nâng cấp hệ thống tự động cập nhật mượt mà và an toàn\n• Thêm Tab Render video GPU/CPU chuyên dụng cho Premiere / CapCut\n• Tối ưu kiểm tra định dạng H.264 trước khi vào hàng chờ\n• Tự động quét và xoay vòng Proxy HTTPS vượt Bot-check"
