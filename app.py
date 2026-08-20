@@ -27,7 +27,7 @@ from tkinter import filedialog
 import customtkinter as ctk
 import yt_dlp
 
-APP_VERSION = "2.3.7"
+APP_VERSION = "2.3.8"
 
 try:
     if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -304,12 +304,18 @@ def apply_update_and_restart(new_exe_path):
     ps1_path = os.path.join(exe_dir, "updater.ps1")
     pid = os.getpid()
 
-    # Tạo script PowerShell an toàn 100%
+    # Tạo script PowerShell an toàn 100% với UTF-8-SIG (hỗ trợ đường dẫn có dấu tiếng Việt như Máy tính)
     ps_content = f"""# PowerShell Auto-Updater for Pro Video Downloader
 $targetPid = {pid}
-$currentExe = '{current_exe}'
-$newExe = '{new_exe_path}'
-$exeDir = '{exe_dir}'
+$currentExe = @'
+{current_exe}
+'@
+$newExe = @'
+{new_exe_path}
+'@
+$exeDir = @'
+{exe_dir}
+'@
 
 # 1. Chờ tiến trình PID đóng hẳn
 for ($i = 0; $i -lt 30; $i++) {{
@@ -321,7 +327,7 @@ Stop-Process -Id $targetPid -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 500
 
 # 2. Vòng lặp thay thế file đến khi file mới ghi đè thành công
-for ($i = 0; $i -lt 40; $i++) {{
+for ($i = 0; $i -lt 50; $i++) {{
     if (-not (Test-Path -LiteralPath $newExe)) {{ break }}
     try {{
         Remove-Item -LiteralPath $currentExe -Force -ErrorAction SilentlyContinue
@@ -357,7 +363,7 @@ Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
 """
 
     try:
-        with open(ps1_path, "w", encoding="utf-8") as f:
+        with open(ps1_path, "w", encoding="utf-8-sig") as f:
             f.write(ps_content)
 
         env = dict(os.environ)
