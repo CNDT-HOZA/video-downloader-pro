@@ -1,0 +1,18 @@
+# CHU Y: file nay chi dung ky tu ASCII.
+# pip 24.0 doc requirements.txt bang encoding cua he thong (cp1252 tren may
+# tieng Viet), nen dau tieng Viet o day se lam pip crash UnicodeDecodeError.
+#
+# Pin phien ban de build hom nay va build thang sau cho ra cung ket qua.
+# Day la cac phien ban da chay that.
+#
+# LUU Y: yt-dlp can duoc cap nhat dinh ky (1-2 thang/lan), vi cac trang web
+# doi cau truc lien tuc va ban cu se dan hong. Cach bump:
+#   pip install --upgrade yt-dlp
+#   python -m unittest test_app
+#   roi sua so phien ban duoi day cho khop.
+yt-dlp==2026.6.9
+customtkinter==6.0.0
+
+# pillow KHONG bat buoc de chay app (customtkinter bat ImportError va bo qua).
+# Chi can khi muon chay generate_icon.py de tao lai icon.ico:
+#   pip install pillow
