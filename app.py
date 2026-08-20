@@ -26,7 +26,7 @@ from tkinter import filedialog
 import customtkinter as ctk
 import yt_dlp
 
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
 
 try:
     if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -296,17 +296,27 @@ if not errorlevel 1 (
 )
 
 timeout /t 2 /nobreak > nul
-move /y "{new_exe_path}" "{current_exe}" > nul
 
+:retry_replace
+del /f /q "{current_exe}" 2>nul
+move /y "{new_exe_path}" "{current_exe}" > nul
 if errorlevel 1 (
     copy /y "{new_exe_path}" "{current_exe}" > nul
-    del /f /q "{new_exe_path}" > nul
+    if not errorlevel 1 (
+        del /f /q "{new_exe_path}" 2>nul
+    )
+)
+
+if not exist "{current_exe}" (
+    timeout /t 1 /nobreak > nul
+    goto retry_replace
 )
 
 cd /d "{exe_dir}"
 set "_MEIPASS2="
 set "_MEIPASS="
-start "" "{current_exe}"
+timeout /t 1 /nobreak > nul
+start "" /D "{exe_dir}" "{current_exe}"
 del "%~f0" & exit
 """
 
