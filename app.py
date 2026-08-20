@@ -27,7 +27,7 @@ from tkinter import filedialog
 import customtkinter as ctk
 import yt_dlp
 
-APP_VERSION = "2.3.5"
+APP_VERSION = "2.3.6"
 
 try:
     if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -294,77 +294,85 @@ def download_app_update(download_url, target_path, on_progress=None):
 
 
 def apply_update_and_restart(new_exe_path):
-    """Áp dụng bản cập nhật: tạo updater.bat đợi app đóng rồi đè file EXE và khởi động lại."""
+    """Áp dụng bản cập nhật: tạo updater.ps1 đợi app đóng rồi đè file EXE và khởi động lại."""
     if not getattr(sys, 'frozen', False):
         safe_print(f"[AutoUpdate] Dang chay ma nguon, file moi da luu tai: {new_exe_path}")
         return
 
     current_exe = os.path.abspath(sys.executable)
     exe_dir = os.path.dirname(current_exe)
-    bat_path = os.path.join(exe_dir, "updater.bat")
+    ps1_path = os.path.join(exe_dir, "updater.ps1")
     pid = os.getpid()
 
-    bat_content = f"""@echo off
-chcp 65001 > nul
-cd /d "{exe_dir}"
-set _MEIPASS2=
-set _MEIPASS=
-echo Đang đóng ứng dụng cũ và chuẩn bị cập nhật...
+    # Tạo script PowerShell an toàn 100%
+    ps_content = f"""# PowerShell Auto-Updater for Pro Video Downloader
+$targetPid = {pid}
+$currentExe = '{current_exe}'
+$newExe = '{new_exe_path}'
+$exeDir = '{exe_dir}'
 
-:: 1. Chờ tiến trình PID {pid} đóng hoàn toàn
-:wait_loop
-tasklist /fi "PID eq {pid}" 2>nul | findstr /i "{pid}" > nul
-if not errorlevel 1 (
-    ping 127.0.0.1 -n 2 > nul
-    goto wait_loop
-)
+# 1. Chờ tiến trình PID đóng hẳn
+for ($i = 0; $i -lt 30; $i++) {{
+    $proc = Get-Process -Id $targetPid -ErrorAction SilentlyContinue
+    if (-not $proc) {{ break }}
+    Start-Sleep -Milliseconds 200
+}}
+Stop-Process -Id $targetPid -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 500
 
-:: 2. Đảm bảo đóng hết mọi tiến trình phụ nếu còn
-taskkill /F /PID {pid} >nul 2>&1
-ping 127.0.0.1 -n 3 > nul
+# 2. Vòng lặp thay thế file đến khi file mới ghi đè thành công
+for ($i = 0; $i -lt 40; $i++) {{
+    if (-not (Test-Path -LiteralPath $newExe)) {{ break }}
+    try {{
+        Remove-Item -LiteralPath $currentExe -Force -ErrorAction SilentlyContinue
+        Move-Item -LiteralPath $newExe -Destination $currentExe -Force -ErrorAction Stop
+        break
+    }} catch {{
+        try {{
+            Copy-Item -LiteralPath $newExe -Destination $currentExe -Force -ErrorAction Stop
+            Remove-Item -LiteralPath $newExe -Force -ErrorAction SilentlyContinue
+            break
+        }} catch {{
+            Start-Sleep -Milliseconds 300
+        }}
+    }}
+}}
 
-:: 3. Vòng lặp thay thế file: chỉ dừng lại khi new_exe_path đã được di chuyển thành công vào current_exe
-:retry_replace
-del /f /q "{current_exe}" >nul 2>&1
-move /y "{new_exe_path}" "{current_exe}" > nul 2>&1
-if exist "{new_exe_path}" (
-    copy /y "{new_exe_path}" "{current_exe}" > nul 2>&1
-    if not errorlevel 1 (
-        del /f /q "{new_exe_path}" >nul 2>&1
-    )
-)
+# 3. Xoá sạch mọi biến môi trường tạm của PyInstaller
+[System.Environment]::SetEnvironmentVariable('_MEIPASS2', $null, 'Process')
+[System.Environment]::SetEnvironmentVariable('_MEIPASS', $null, 'Process')
+Remove-Item env:_MEIPASS2 -ErrorAction SilentlyContinue
+Remove-Item env:_MEIPASS -ErrorAction SilentlyContinue
 
-if exist "{new_exe_path}" (
-    ping 127.0.0.1 -n 2 > nul
-    goto retry_replace
-)
+# 4. Khởi động bản mới hoàn toàn độc lập và xoá script cập nhật
+if (Test-Path -LiteralPath $currentExe) {{
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $currentExe
+    $psi.WorkingDirectory = $exeDir
+    $psi.UseShellExecute = $false
+    [System.Diagnostics.Process]::Start($psi)
+}}
 
-:: 4. Khởi động bản mới hoàn toàn độc lập
-cd /d "{exe_dir}"
-set _MEIPASS2=
-set _MEIPASS=
-ping 127.0.0.1 -n 2 > nul
-start "" /D "{exe_dir}" "{current_exe}"
-del "%~f0" & exit
+Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
 """
 
     try:
-        with open(bat_path, "w", encoding="utf-8") as f:
-            f.write(bat_content)
+        with open(ps1_path, "w", encoding="utf-8") as f:
+            f.write(ps_content)
 
         env = dict(os.environ)
         env.pop('_MEIPASS2', None)
         env.pop('_MEIPASS', None)
 
         subprocess.Popen(
-            ["cmd.exe", "/c", bat_path],
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1_path],
             cwd=exe_dir,
             env=env,
             creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0) | getattr(subprocess, 'CREATE_NO_WINDOW', 0)
         )
         os._exit(0)
     except Exception as e:
-        safe_print(f"[AutoUpdate] Khong the khoi chay updater.bat: {e}")
+        safe_print(f"[AutoUpdate] Khong the khoi chay updater.ps1: {e}")
 
 
 def check_latest_ytdlp_version():
