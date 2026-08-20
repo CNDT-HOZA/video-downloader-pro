@@ -3,7 +3,7 @@ chcp 65001 >nul
 title Build Pro Video Downloader
 cd /d "%~dp0"
 
-set "EXE_NAME=Pro_VideoDownloader_HoangDuc"
+set "EXE_NAME=Pro_VideoDownloader"
 
 echo.
 echo ============================================================

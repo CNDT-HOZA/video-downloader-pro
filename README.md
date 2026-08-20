@@ -1,8 +1,6 @@
-# ⚡ Pro Video Downloader — by Hoàng Đức
+# ⚡ Pro Video Downloader
 
 Tải video từ **YouTube, TikTok, Douyin, Facebook, Instagram, Twitter/X** và **1000+ nền tảng khác**.
-
-> Bản **2.0.0** đã được rút gọn: chỉ còn đúng chức năng tải video.
 
 ---
 
@@ -10,8 +8,8 @@ Tải video từ **YouTube, TikTok, Douyin, Facebook, Instagram, Twitter/X** và
 
 ### Cách 1: Tải file .exe
 
-1. Vào trang **[Releases](../../releases/latest)**
-2. Tải `Pro_VideoDownloader_HoangDuc.exe` — chạy trực tiếp, không cần cài
+1. Vào trang **[Releases](../../releases/latest)** hoặc tải trực tiếp từ nhánh `App`
+2. Tải `Pro_VideoDownloader.exe` — chạy trực tiếp, không cần cài
 
 > ⚠️ Windows SmartScreen có thể cảnh báo "Unknown Publisher" → **More info** → **Run anyway**.
 

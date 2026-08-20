@@ -2802,18 +2802,48 @@ class VideoDownloaderApp(ctk.CTk):
                     counter += 1
                 os.rename(src, dst)
 
+            # Kiểm tra định dạng codec TRƯỚC KHI cho vào hàng chờ Render
+            should_queue_render = False
             if not is_mp3:
+                selected_mode = (self._transcode_menus[0].get() if getattr(self, '_transcode_menus', None)
+                                 else load_config().get('transcode_mode', default_transcode_mode()))
+                mode_cfg = get_transcode_config(selected_mode) if has_ffmpeg() else None
+                if mode_cfg and mode_cfg.get('encoder') != 'none':
+                    media = probe_media(dst)
+                    if needs_transcode(media):
+                        should_queue_render = True
+                    else:
+                        vcodec_name = (media.get('vcodec') or 'H.264').upper()
+                        if card:
+                            card.set_completed(dst, vcodec_name)
+                            card.add_log(f"Codec video đã là {vcodec_name}, giữ nguyên file gốc.")
+                        self._log(f"[{task_id}] ✅ Codec đã là {vcodec_name}, giữ nguyên không cần Render: {os.path.basename(dst)}")
+                else:
+                    if card:
+                        card.set_completed(dst)
+                    self._log(f"[{task_id}] ✅ Hoàn tất (không yêu cầu Render): {os.path.basename(dst)}")
+            else:
+                if card:
+                    card.set_completed(dst, "MP3")
+                self._log(f"[{task_id}] ✅ Hoàn tất: {os.path.basename(dst)}")
+
+            if should_queue_render:
                 card.set_status("⏳ Chờ render GPU...", "#f0c070")
                 card.set_detail(f"Đã tải xong -> Đưa vào hàng đợi render tuần tự...")
                 self._log(f"[{task_id}] 📥 Tải xong: {os.path.basename(dst)} ➔ Đưa vào hàng đợi render tuần tự...")
                 self.after(0, lambda: self.status.configure(
                     text=f"[{task_id}] Đã tải xong, đang xếp hàng render GPU...", text_color="#f0c070"))
+                # Đưa vào hàng đợi render tuần tự 1 luồng kèm tham chiếu card
+                self._transcode_queue.put((task_id, dst, quality, is_mp3, info, card))
             else:
-                card.set_completed(dst, "MP3")
-                self._log(f"[{task_id}] ✅ Hoàn tất: {os.path.basename(dst)}")
-
-            # Đưa vào hàng đợi render tuần tự 1 luồng kèm tham chiếu card
-            self._transcode_queue.put((task_id, dst, quality, is_mp3, info, card))
+                self.after(0, lambda p=os.path.basename(dst): self.status.configure(
+                    text=f"✅ Hoàn tất: {p[:50]}", text_color="#55efc4"))
+                with self._task_lock:
+                    self._active_downloads_count = max(0, self._active_downloads_count - 1)
+                    remain = self._active_downloads_count
+                if remain == 0:
+                    self.after(0, lambda: (self.pbar.set(1.0), self.status.configure(
+                        text="✅ Tất cả tác vụ đã hoàn tất!", text_color="#55efc4")))
 
         except Exception as e:
             message = str(e).split('\n')[0][:120]
@@ -3151,16 +3181,40 @@ class VideoDownloaderApp(ctk.CTk):
                         counter += 1
                     os.rename(src, dst)
 
-                if not is_mp3 and mode_cfg:
+                should_queue_render = False
+                if not is_mp3 and mode_cfg and mode_cfg.get('encoder') != 'none':
+                    media = probe_media(dst)
+                    if needs_transcode(media):
+                        should_queue_render = True
+                    else:
+                        vcodec_name = (media.get('vcodec') or 'H.264').upper()
+                        if card:
+                            card.set_completed(dst, vcodec_name)
+                            card.add_log(f"Codec video đã là {vcodec_name}, không cần Render.")
+                        self._log(f"[{i}/{total}] ✅ Codec đã là {vcodec_name}, giữ nguyên không cần Render: {os.path.basename(dst)}")
+                        h = result_height(info)
+                        with lock:
+                            results.append((os.path.basename(dst), h))
+                elif is_mp3:
+                    if card:
+                        card.set_completed(dst, "MP3")
+                    self._log(f"[{i}/{total}] ✅ Hoàn tất: {os.path.basename(dst)}")
+                    with lock:
+                        results.append((os.path.basename(dst), 0))
+                else:
+                    if card:
+                        card.set_completed(dst)
+                    self._log(f"[{i}/{total}] ✅ Hoàn tất: {os.path.basename(dst)}")
+                    h = result_height(info)
+                    with lock:
+                        results.append((os.path.basename(dst), h))
+
+                if should_queue_render:
                     if card:
                         card.set_status("⏳ Chờ render GPU...", "#f0c070")
                         card.set_detail("Đã tải xong -> Đang xếp hàng render...")
                     self._log(f"[{i}/{total}] 📥 Tải xong: {os.path.basename(dst)} ➔ Đưa vào hàng đợi render...")
-                elif is_mp3:
-                    if card:
-                        card.set_completed(dst, "MP3")
-
-                transcode_queue.put((i, total, url, dst, info, card))
+                    transcode_queue.put((i, total, url, dst, info, card))
 
             except Exception as e:
                 message = str(e).split('\n')[0][:120]
