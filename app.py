@@ -1768,6 +1768,7 @@ class VideoDownloaderApp(ctk.CTk):
         self._last_scanned_url = ""
         self._format_scan_timer = None
         self._tasks = []
+        self._render_file_paths = []
 
         # Hàng đợi render tuần tự 1 luồng duy nhất cho toàn bộ app
         self._transcode_queue = queue.Queue()
@@ -1958,12 +1959,12 @@ class VideoDownloaderApp(ctk.CTk):
         self.tabview.grid(row=1, column=0, padx=16, pady=(6, 6), sticky="nsew")
         self.tabview.add("▶ Tải Video")
         self.tabview.add("⏬ Hàng Loạt")
-        self.tabview.add("📡 Quét Kênh")
+        self.tabview.add("🎬 Render")
         self.tabview._segmented_button.configure(font=ctk.CTkFont(family=self.FONT, size=12, weight="bold"))
 
         self._build_tab_single(self.tabview.tab("▶ Tải Video"))
         self._build_tab_bulk(self.tabview.tab("⏬ Hàng Loạt"))
-        self._build_tab_channel(self.tabview.tab("📡 Quét Kênh"))
+        self._build_tab_render(self.tabview.tab("🎬 Render"))
 
     def _quality_menu(self, parent, width=220):
         menu = ctk.CTkOptionMenu(parent, width=width, height=34, values=list(format_map().keys()),
@@ -2053,59 +2054,67 @@ class VideoDownloaderApp(ctk.CTk):
         self.btn_bulk = self._action_button(tab, "⚡  BẮT ĐẦU TẢI NGAY", self.on_bulk, width=280, height=44, size=15)
         self.btn_bulk.pack(pady=(2, 4))
 
-    def _build_tab_channel(self, tab):
-        ctk.CTkLabel(tab, text="Quét toàn bộ video của một kênh hoặc playlist",
-                     font=ctk.CTkFont(family=self.FONT, size=9), text_color="#777",
-                     wraplength=460).pack(pady=(4, 4))
+    def _build_tab_render(self, tab):
+        ctk.CTkLabel(tab, text="Chuyển mã & render tối ưu video sang chuẩn H.264 (MP4) để dựng phim bằng Premiere / CapCut / Vegas",
+                     font=ctk.CTkFont(family=self.FONT, size=10), text_color="#a4b0be",
+                     wraplength=480).pack(pady=(4, 4))
 
-        self.chan_url = ctk.CTkEntry(tab, placeholder_text="Dán URL kênh/playlist YouTube, TikTok, Douyin...",
-                                     height=40, font=ctk.CTkFont(family=self.FONT, size=13), corner_radius=8)
-        self.chan_url.pack(pady=(0, 6), padx=16, fill="x")
+        # Hàng chọn file / thư mục
+        file_row = ctk.CTkFrame(tab, fg_color="transparent")
+        file_row.pack(pady=(2, 4), fill="x", padx=16)
 
-        options = ctk.CTkFrame(tab, fg_color="transparent")
-        options.pack(pady=(0, 6), fill="x", padx=16)
+        ctk.CTkButton(file_row, text="📁 Chọn Video...", width=140, height=36,
+                      font=ctk.CTkFont(family=self.FONT, size=12, weight="bold"),
+                      fg_color="#34495e", hover_color="#2c3e50", corner_radius=8,
+                      command=self._pick_render_files).pack(side="left", padx=(0, 6))
 
-        col_q = ctk.CTkFrame(options, fg_color="transparent")
-        col_q.pack(side="left", expand=True, fill="x", padx=(0, 4))
-        ctk.CTkLabel(col_q, text="Chất lượng:",
-                     font=ctk.CTkFont(family=self.FONT, size=10, weight="bold"),
-                     text_color="#55efc4").pack(anchor="w", pady=(0, 2))
-        self.q_chan = self._quality_menu(col_q, width=170)
-        self.q_chan.pack(fill="x")
+        ctk.CTkButton(file_row, text="📂 Chọn Cả Thư Mục...", width=160, height=36,
+                      font=ctk.CTkFont(family=self.FONT, size=12, weight="bold"),
+                      fg_color="#2c3e50", hover_color="#1a252f", corner_radius=8,
+                      command=self._pick_render_folder).pack(side="left", padx=(0, 6))
 
-        col_limit = ctk.CTkFrame(options, fg_color="transparent")
-        col_limit.pack(side="left", padx=4)
-        ctk.CTkLabel(col_limit, text="Số lượng:",
-                     font=ctk.CTkFont(family=self.FONT, size=10, weight="bold"),
-                     text_color="#f1c40f").pack(anchor="w", pady=(0, 2))
-        self.chan_limit = ctk.CTkOptionMenu(col_limit, width=105, height=34, corner_radius=8,
-                                            values=["Tất cả", "10 video", "20 video", "50 video", "100 video"])
-        self.chan_limit.pack()
+        ctk.CTkButton(file_row, text="🗑️ Xoá danh sách", width=120, height=36,
+                      font=ctk.CTkFont(family=self.FONT, size=11),
+                      fg_color="transparent", hover_color="#c0392b", text_color="#ff7675", corner_radius=8,
+                      command=self._clear_render_files).pack(side="right")
 
-        col_t = ctk.CTkFrame(options, fg_color="transparent")
-        col_t.pack(side="right", expand=True, fill="x", padx=(4, 0))
-        ctk.CTkLabel(col_t, text="🎬 Dựng phim:",
-                     font=ctk.CTkFont(family=self.FONT, size=10, weight="bold"),
+        # Hộp hiển thị danh sách video đã chọn
+        self.render_file_box = ctk.CTkTextbox(tab, height=75, font=ctk.CTkFont(family="Consolas", size=10),
+                                              corner_radius=8, border_width=1, border_color="#34495e",
+                                              fg_color="#0e1017", text_color="#dfe6e9")
+        self.render_file_box.pack(pady=(2, 4), padx=16, fill="both", expand=True)
+        self.render_file_box.insert("1.0", "Chưa chọn file nào. Bấm 'Chọn Video' hoặc 'Chọn Cả Thư Mục' ở trên để nạp file cần Render...")
+        self.render_file_box.configure(state="disabled")
+
+        # Hàng tùy chọn Render
+        opt_row = ctk.CTkFrame(tab, fg_color="transparent")
+        opt_row.pack(pady=(4, 6), fill="x", padx=16)
+
+        col_t = ctk.CTkFrame(opt_row, fg_color="transparent")
+        col_t.pack(side="left", expand=True, fill="x", padx=(0, 6))
+        ctk.CTkLabel(col_t, text="🎬 Chế độ Render (Engine):",
+                     font=ctk.CTkFont(family=self.FONT, size=11, weight="bold"),
                      text_color="#81ecec").pack(anchor="w", pady=(0, 2))
-        self.transcode_chan = self._build_transcode_menu(col_t, width=190)
-        self.transcode_chan.pack(fill="x")
+        self.transcode_tab_menu = self._build_transcode_menu(col_t, width=270)
+        self.transcode_tab_menu.pack(fill="x")
 
-        buttons = ctk.CTkFrame(tab, fg_color="transparent")
-        buttons.pack(pady=(0, 4))
-        self.btn_scan = self._action_button(buttons, "🔍 QUÉT KÊNH", self.on_scan, width=140, height=38,
-                                            size=12, fg_color="#6c5ce7", hover_color="#5a4bd1")
-        self.btn_scan.pack(side="left", padx=6)
-        self.btn_chan_dl = self._action_button(buttons, "⏬ TẢI TẤT CẢ", self.on_chan_download,
-                                               width=140, height=38, size=12, state="disabled")
-        self.btn_chan_dl.pack(side="left", padx=6)
+        col_dest = ctk.CTkFrame(opt_row, fg_color="transparent")
+        col_dest.pack(side="right", expand=True, fill="x", padx=(6, 0))
+        ctk.CTkLabel(col_dest, text="💾 Lưu file đầu ra:",
+                     font=ctk.CTkFont(family=self.FONT, size=11, weight="bold"),
+                     text_color="#55efc4").pack(anchor="w", pady=(0, 2))
+        self.render_out_option = ctk.CTkOptionMenu(
+            col_dest, width=250, height=34, corner_radius=8, fg_color="#2c3e50",
+            values=["Lưu vào cùng thư mục file gốc", "Lưu vào thư mục Tải xuống mặc định"]
+        )
+        self.render_out_option.pack(fill="x")
 
-        self.chan_info = ctk.CTkLabel(tab, text="", font=ctk.CTkFont(family=self.FONT, size=10),
-                                      text_color="#8cf", wraplength=460)
-        self.chan_info.pack(pady=(1, 1))
-        self.chan_list = ctk.CTkTextbox(tab, height=75, state="disabled",
-                                        font=ctk.CTkFont(family=self.FONT, size=10))
-        self.chan_list.pack(pady=(0, 4), padx=10, fill="both", expand=True)
-
+        # Nút bắt đầu Render
+        self.btn_start_render = self._action_button(
+            tab, "🎬  BẮT ĐẦU RENDER NGAY", self.on_start_render,
+            width=280, height=44, size=15, fg_color="#e17055", hover_color="#d63031"
+        )
+        self.btn_start_render.pack(pady=(2, 4))
     def _build_status_bar(self):
         frame = ctk.CTkFrame(self, fg_color="transparent")
         frame.grid(row=3, column=0, padx=16, pady=(0, 6), sticky="ew")
@@ -2579,8 +2588,6 @@ class VideoDownloaderApp(ctk.CTk):
     def _set_buttons_enabled(self, enabled):
         """Khoá nút hành động khi đang chạy quét kênh / tải hàng loạt."""
         for button in self._action_buttons:
-            if button is self.btn_chan_dl and enabled and not self._chan_videos:
-                continue  # chưa quét thì vẫn để mờ
             # Nút Tải Đơn Lẻ luôn mở để người dùng có thể bấm tải thêm link mới bất kỳ lúc nào
             if button is getattr(self, 'btn_single', None):
                 button.configure(state="normal")
@@ -2599,116 +2606,148 @@ class VideoDownloaderApp(ctk.CTk):
         self._busy = False
         self._set_buttons_enabled(True)
 
-    # ───── Quét kênh ─────
+    # ───── Render lại video địa phương ─────
 
-    def on_scan(self):
-        urls = extract_urls(self.chan_url.get().strip())
-        if not urls:
-            self._alert("Lỗi", "Nhập URL kênh!", "error")
+    def _pick_render_files(self):
+        paths = filedialog.askopenfilenames(
+            title="Chọn các video cần Render lại",
+            filetypes=[
+                ("Video files", "*.mp4 *.webm *.mkv *.mov *.avi *.flv *.ts *.m4v *.wmv *.3gp"),
+                ("Tất cả file", "*.*")
+            ]
+        )
+        if not paths:
             return
-        self.chan_info.configure(text="🔍 Đang quét kênh...")
-        self._log(f"🔍 Bắt đầu quét kênh: {urls[0]}...")
-        self._set_textbox(self.chan_list, "")
-        self._start_job(self._scan_worker, (urls[0],))
+        for p in paths:
+            norm = os.path.normpath(p)
+            if norm not in self._render_file_paths and os.path.isfile(norm):
+                self._render_file_paths.append(norm)
+        self._refresh_render_file_box()
 
-    def _channel_limit(self):
-        value = self.chan_limit.get()
-        return None if value == "Tất cả" else int(value.split()[0])
+    def _pick_render_folder(self):
+        folder = filedialog.askdirectory(title="Chọn thư mục chứa các video cần Render lại")
+        if not folder or not os.path.isdir(folder):
+            return
+        video_exts = {'.mp4', '.webm', '.mkv', '.mov', '.avi', '.flv', '.ts', '.m4v', '.wmv', '.3gp'}
+        found = []
+        for root, _, files in os.walk(folder):
+            for f in files:
+                if os.path.splitext(f)[1].lower() in video_exts:
+                    found.append(os.path.normpath(os.path.join(root, f)))
+        if not found:
+            self._alert("Thông báo", "Không tìm thấy file video nào trong thư mục đã chọn.", "info")
+            return
+        for p in found:
+            if p not in self._render_file_paths:
+                self._render_file_paths.append(p)
+        self._refresh_render_file_box()
 
-    def _scan_worker(self, url):
-        try:
-            opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'extract_flat': True,
-                'skip_download': True,
-                'socket_timeout': 20,
-            }
-            if is_douyin_url(url):
-                opts['http_headers'] = douyin_headers()
-            elif is_instagram_url(url):
-                opts['http_headers'] = instagram_headers()
+    def _clear_render_files(self):
+        self._render_file_paths.clear()
+        self._refresh_render_file_box()
 
-            limit = self._channel_limit()
-            if limit:
-                opts['playlistend'] = limit
+    def _refresh_render_file_box(self):
+        self.render_file_box.configure(state="normal")
+        self.render_file_box.delete("1.0", "end")
+        if not self._render_file_paths:
+            self.render_file_box.insert("1.0", "Chưa chọn file nào. Bấm 'Chọn Video' hoặc 'Chọn Cả Thư Mục' ở trên để nạp file cần Render...")
+        else:
+            lines = [f"{idx}. [{os.path.basename(p)}] ({p})" for idx, p in enumerate(self._render_file_paths, start=1)]
+            self.render_file_box.insert("1.0", "\n".join(lines))
+        self.render_file_box.configure(state="disabled")
 
-            info = None
-            last_err = ""
+    def on_start_render(self):
+        if not self._render_file_paths:
+            self._alert("Chưa chọn file", "Vui lòng chọn ít nhất 1 file video để Render.", "warning")
+            return
+        if not has_ffmpeg():
+            self._alert("Thiếu FFmpeg", "Ứng dụng cần FFmpeg để thực hiện Render. Vui lòng chờ FFmpeg cài xong.", "error")
+            return
+
+        files = list(self._render_file_paths)
+        mode_str = self.transcode_tab_menu.get()
+        out_opt = self.render_out_option.get()
+
+        threading.Thread(target=self._render_worker_thread, args=(files, mode_str, out_opt), daemon=True).start()
+
+    def _render_worker_thread(self, files, mode_str, out_opt):
+        total = len(files)
+        mode_cfg = get_transcode_config(mode_str)
+        if not mode_cfg or mode_cfg.get('encoder') == 'none':
+            self._alert("Chế độ render", "Vui lòng chọn chế độ Render GPU hoặc CPU (không chọn 'Không chuyển mã').", "warning")
+            return
+
+        enc_name = mode_cfg['encoder']
+        is_gpu = enc_name in ('h264_nvenc', 'h264_mf', 'h264_amf', 'h264_qsv')
+        mode_label = "GPU 🚀" if is_gpu else "CPU ⚙"
+
+        self._log(f"🎬 Bắt đầu Render {total} video ({mode_label} • {enc_name})...")
+        self.after(0, lambda: (self.pbar.grid(), self.pbar.set(0)))
+
+        for idx, src_path in enumerate(files, start=1):
+            if not os.path.isfile(src_path):
+                self._log(f"⚠ [{idx}/{total}] File không tồn tại: {src_path}", level="warning")
+                continue
+
+            with self._task_lock:
+                self._task_counter += 1
+                task_id = f"Render #{self._task_counter}"
+
+            file_name = os.path.basename(src_path)
+            card = self._create_task_card(task_id, src_path, f"Render {mode_label}", title=file_name)
+            card.set_status(f"⏳ Đang phân tích...", "#00cec9")
+            card.set_detail("Đang đọc thông số video gốc...")
+
             try:
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(url, download=False)
+                media = probe_media(src_path)
+                src_codec = (media.get('vcodec') or 'UNKNOWN').upper()
+                width = media.get('width') or '?'
+                height = media.get('height') or '?'
+
+                if "thư mục Tải xuống mặc định" in out_opt:
+                    out_dir = self.download_path
+                else:
+                    out_dir = os.path.dirname(src_path)
+
+                os.makedirs(out_dir, exist_ok=True)
+                base_name, _ = os.path.splitext(file_name)
+                target_path = os.path.join(out_dir, f"{base_name}_h264.{mode_cfg['ext']}")
+                counter = 1
+                while os.path.exists(target_path):
+                    target_path = os.path.join(out_dir, f"{base_name}_h264_{counter}.{mode_cfg['ext']}")
+                    counter += 1
+
+                self._log(f"[{task_id}] 🎬 Render: {file_name} ({src_codec}, {width}x{height}) ➔ {os.path.basename(target_path)}...")
+                card.set_status(f"🎬 Render {mode_label} ({enc_name})", "#f0c070")
+                card.set_detail(f"{src_codec} ({width}x{height}) ➔ H.264 MP4")
+                card.add_log(f"Bắt đầu render {mode_label} ({enc_name}): {src_codec} -> H.264")
+
+                def on_progress(ratio, c=card, fn=file_name, i=idx, t=total):
+                    pct_str = f"{ratio * 100:.1f}%"
+                    c.set_progress(ratio, pct_str)
+                    self.after(0, lambda r=ratio, p=pct_str, f=fn, curr=i, tot=t: (
+                        self.pbar.set(r),
+                        self.status.configure(text=f"[{curr}/{tot}] Render {f[:30]}: {p}")
+                    ))
+
+                transcode(src_path, target_path, mode_cfg, media=media, on_progress=on_progress)
+
+                if os.path.exists(target_path) and os.path.getsize(target_path) > 0:
+                    card.set_completed(target_path, "H.264")
+                    card.add_log("Render hoàn tất thành công.")
+                    self._log(f"[{task_id}] ✅ Render hoàn tất: {os.path.basename(target_path)}")
+                else:
+                    raise RuntimeError("File đầu ra không được tạo hoặc dung lượng rỗng.")
+
             except Exception as e:
-                last_err = str(e).split('\n')[0][:180]
-                if is_bot_blocked(last_err):
-                    self._log(f"⚠ Phát hiện Bot check khi quét kênh, thử Proxy...", level="warning")
-                    for retry in range(1, 11):
-                        current_proxy = proxy_manager.get_proxy()
-                        if not current_proxy:
-                            break
-                        self._log(f"🔄 Quét kênh qua Proxy: {current_proxy} (Lần {retry}/10)...")
-                        self.after(0, lambda r=retry, p=current_proxy: self.chan_info.configure(
-                            text=f"🔄 Phát hiện Bot check, đang thử Proxy ({p}) lần {r}/10..."))
-                        try:
-                            p_opts = dict(opts)
-                            p_opts['proxy'] = current_proxy
-                            p_opts['socket_timeout'] = 8
-                            p_opts['retries'] = 0
-                            p_opts['fragment_retries'] = 0
-                            p_opts['extractor_retries'] = 0
-                            with yt_dlp.YoutubeDL(p_opts) as ydl:
-                                info = ydl.extract_info(url, download=False)
-                                if info:
-                                    self._log(f"✅ Quét kênh thành công qua Proxy: {current_proxy}")
-                                    break
-                        except Exception as pe:
-                            proxy_manager.mark_proxy_dead(current_proxy)
-                            last_err = str(pe).split('\n')[0][:180]
-                            self._log(f"⚠ Proxy {current_proxy} lỗi: {last_err[:50]}")
+                err_msg = str(e).split('\n')[0][:120]
+                card.set_failed(f"Lỗi render: {err_msg}")
+                self._log(f"❌ [{task_id}] Lỗi render: {err_msg}", level="error")
 
-            if not info:
-                raise RuntimeError(last_err or "Không thể quét kênh")
-
-            entries = info.get('entries') or ([info] if info.get('id') else [])
-            videos = []
-            for entry in entries:
-                item_url = entry_to_url(entry)
-                if item_url:
-                    videos.append({'url': item_url, 'title': entry.get('title', 'N/A')})
-
-            channel = info.get('channel') or info.get('uploader') or info.get('title') or 'Kênh'
-            platform = detect_platform(url, info)
-            lines = [f"{i + 1}. {v['title']}" for i, v in enumerate(videos[:100])]
-            if len(videos) > 100:
-                lines.append(f"... và {len(videos) - 100} video khác")
-
-            self._log(f"✅ [{platform}] Đã tìm thấy {len(videos)} video trong kênh: {channel}")
-            self.after(0, self._scan_finished, videos, platform, channel, "\n".join(lines))
-        except Exception as e:
-            message = str(e).split('\n')[0][:100]
-            self._log(f"❌ Lỗi quét kênh: {message}", level="error")
-            self.after(0, lambda: self.chan_info.configure(text=f"❌ Lỗi: {message}"))
-            self.after(0, self._job_done)
-
-    def _scan_finished(self, videos, platform, channel, listing):
-        self._chan_videos = videos
-        self.chan_info.configure(text=f"✅ [{platform}] Tìm thấy {len(videos)} video trong: {channel}")
-        self._set_textbox(self.chan_list, listing)
-        self._job_done()
-
-    def _set_textbox(self, textbox, text):
-        textbox.configure(state="normal")
-        textbox.delete("1.0", "end")
-        if text:
-            textbox.insert("1.0", text)
-        textbox.configure(state="disabled")
-
-    def on_chan_download(self):
-        if not self._chan_videos:
-            self._alert("Lỗi", "Quét kênh trước!", "error")
-            return
-        urls = [v['url'] for v in self._chan_videos if v['url']]
-        self._start_job(self._download_engine, (urls, self.q_chan.get(), True))
+        self.after(0, lambda: (
+            self.pbar.set(1.0),
+            self.status.configure(text=f"✅ Đã hoàn thành tiến trình Render {total} video!", text_color="#55efc4")
+        ))
 
     # ───── Tải video ─────
 

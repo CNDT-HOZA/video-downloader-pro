@@ -1,7 +1,7 @@
 {
-  "version": "2.2.0",
-  "name": "Pro Video Downloader v2.2.0",
+  "version": "2.3.0",
+  "name": "Pro Video Downloader v2.3.0",
   "release_date": "2026-08-20",
   "download_url": "https://raw.githubusercontent.com/CNDT-HOZA/video-downloader-pro/App/dist/Pro_VideoDownloader.exe",
-  "changelog": "• Giao diện Task Card tiến trình độc lập theo luồng\n• Tự động quét và xoay vòng Proxy HTTPS vượt Bot-check YouTube\n• Tự động kiểm tra và nâng cấp ứng dụng từ Git\n• Kiểm tra định dạng H.264 trước khi cho vào hàng chờ Render\n• Tối ưu chuyển mã Render FFmpeg GPU (NVENC/MediaFoundation) & CPU"
+  "changelog": "• Thêm Tab Render chuyên dụng: Cho phép chọn video/thư mục để Render GPU (NVENC/MediaFoundation) hoặc CPU sang chuẩn H.264 MP4 dựng phim\n• Giao diện Task Card tiến trình độc lập theo luồng\n• Tự động quét và xoay vòng Proxy HTTPS vượt Bot-check YouTube\n• Tự động kiểm tra và nâng cấp ứng dụng từ Git\n• Kiểm tra định dạng H.264 trước khi cho vào hàng chờ Render"
 }

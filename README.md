@@ -28,12 +28,11 @@ python app.py
 |-----------|-------|
 | ▶ **Tải Video** | Dán link → chọn chất lượng → tải |
 | ⏬ **Tải Hàng Loạt** | Dán nhiều link, tải lần lượt |
-| 📡 **Quét Kênh** | Quét toàn bộ video của kênh/playlist rồi tải |
+| 🎬 **Tab Render Video** | Chọn file/thư mục video bất kỳ để Render GPU/CPU sang chuẩn H.264 MP4 |
 | 🎵 **Trích xuất MP3** | Chỉ lấy phần audio (cần FFmpeg) |
 | 📁 **Chọn thư mục lưu** | Nhớ lại cho lần sau |
 | 🍪 **Cookie Instagram** | Nút `IG LOGIN` — dùng cookie trình duyệt hoặc nạp `cookies.txt` |
 | 🌐 **Tự động Proxy** | Tự động lấy proxy & xoay vòng IP vượt chặn Bot check / 403 / IP limit |
-| 🎬 **Chuyển mã dựng phim** | Tự đổi VP9/AV1 sang H.264 để Premiere đọc được |
 
 ### 🎬 Dựng phim bằng Premiere / Vegas / After Effects
 
